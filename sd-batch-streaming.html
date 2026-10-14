@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Batch и Streaming — System Design · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">System Design</div>
+    <h1>Batch и Streaming</h1>
+    <p class="subtitle">Lambda, Kappa и время события</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Вопрос «чем batch отличается от streaming» — только вход в тему. Дальше интервьюер ждёт разговор о компромиссах: латентность против стоимости и сложности, о том, как обрабатывать события, пришедшие не в порядке, и как гарантировать ровно одну запись в приёмник.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Компромиссы обработки</a></li>
+      <li><a href="#s2">2. Lambda vs Kappa</a></li>
+      <li><a href="#s3">3. Время события и окна</a></li>
+      <li><a href="#s4">4. Watermark и exactly-once</a></li>
+      <li><a href="#s5">5. Идемпотентный sink</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Компромиссы обработки</h2>
+      <p>Латентность, стоимость, сложность и три режима исполнения.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем batch отличается от micro-batch и streaming?</li>
+        <li>Когда оправдан streaming, а когда достаточно batch?</li>
+        <li>Какие компромиссы между латентностью, стоимостью и сложностью?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Batch, micro-batch, streaming — в чём разница?</div>
+        <div class="a"><b>Batch</b> обрабатывает накопленный массив раз в час/сутки — самая высокая латентность, но дешевле и проще. <b>Micro-batch</b> запускается каждые секунды-минуты малыми порциями (Spark Structured Streaming) — компромисс. <b>Streaming</b> (истинно-потоковый, Flink) обрабатывает каждое событие по мере прихода — минимальная латентность, максимальная сложность и стоимость.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда streaming реально нужен?</div>
+        <div class="a">Когда решение зависит от свежести данных в пределах секунд: антифрод, алерты, персонализация в реальном времени, real-time дашборды. Если бизнес спокойно живёт с данными вчерашнего дня — batch дешевле в разы, а поддержка проще.</div>
+      </div>
+      <div class="qa">
+        <div class="q">В чём главный компромисс?</div>
+        <div class="a">Чем ниже латентность, тем выше стоимость и сложность: нужны кластеры, мониторинг лага, обработка out-of-order событий, состояние (state) и exactly-once. Каждый шаг влево по латентности умножает инженерные затраты. Хороший ответ начинается со слов «зависит от требований к свежести».</div>
+      </div>
+
+      <ul class="keys">
+        <li>Batch: проще, дешевле, латентность часы-сутки.</li>
+        <li>Micro-batch: компромисс, латентность секунды-минуты.</li>
+        <li>Streaming: латентность миллисекунды, сложность и цена максимальны.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Не выбирайте streaming «потому что модно». Начните с требования: какая максимально допустимая задержка доставки данных до потребителя? Если ответ «до часа» — потоковая обработка почти наверняка не нужна.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Lambda vs Kappa</h2>
+      <p>Две архитектуры: дублируем логику или живём в одном потоке.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое Lambda-архитектура и её проблемы?</li>
+        <li>Что такое Kappa-архитектура и почему она появилась?</li>
+        <li>Какую выбрали бы и почему?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое Lambda-архитектура?</div>
+        <div class="a">Два параллельных пути обработки: <b>batch-слой</b> для точных исторических вычислений и <b>speed-слой</b> для приблизительных свежих результатов. Запрос объединяет оба (serving layer). Даёт свежесть и точность одновременно.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какая у Lambda главная проблема?</div>
+        <div class="a">Логика дублируется: один и тот же расчёт нужно написать и поддерживать дважды — в batch и в streaming. Рано или поздно версии разъезжаются, и batch с realtime показывают разные цифры. Это источник постоянных багов и недоверия к данным.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что предлагает Kappa-архитектура?</div>
+        <div class="a">Всё — поток. Есть единственный streaming-пайплайн, а исторический пересчёт выполняется тем же кодом, но читая лог с начала (replay из Kafka). Одна логика, одна версия правды. Цена — потоковая система должна уметь перерабатывать большой объём и хранить состояние.</div>
+      </div>
+
+      <div class="blocklabel">Схема</div>
+      <pre class="code"><code>Lambda:
+  source --&gt; batch layer (точность)   --\
+                                      &gt;-- serving --&gt; answer
+  source --&gt; speed layer (свежесть)   --/
+  (логика продублирована)
+
+Kappa:
+  source --&gt; Kafka (лог) --&gt; stream job --&gt; answer
+                 ^
+              replay = пересчёт истории тем же кодом</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Современный тренд — Kappa: одна логика дешевле в поддержке, а replay решает backfill. Lambda оправдана, когда потоковый движок физически не тянет исторические объёмы или когда batch-слой уже есть и его дорого переписывать.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Время события и окна</h2>
+      <p>Event time vs processing time и типы окон.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем event time отличается от processing time?</li>
+        <li>Какие бывают окна: tumbling, sliding, session?</li>
+        <li>Как считать метрику, если события приходят не в порядке?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Event time vs processing time?</div>
+        <div class="a"><b>Event time</b> — момент, когда событие произошло (из поля самого события). <b>Processing time</b> — момент, когда система его обработала. Они расходятся из-за задержек сети, буферизации, сбоев. Для корректных метрик («сколько покупок было в 12:00») нужен event time, но он требует обработки опоздавших событий.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие окна бывают?</div>
+        <div class="a"><b>Tumbling</b> — фиксированные непересекающиеся интервалы (каждую минуту). <b>Sliding</b> — окно фиксированной длины, сдвигающееся с шагом (последние 5 минут каждую минуту). <b>Session</b> — группировка событий пользователя с разрывом активности (сессия закрывается после N минут тишины).</div>
+      </div>
+      <div class="qa">
+        <div class="q">События приходят не в порядке — как считать?</div>
+        <div class="a">Использовать event-time окна и watermark: система ждёт некоторое время «дозапоздавших» событий и учитывает их в нужное окно. Плюс опция allowed lateness — до какого момента можно обновить уже закрытое окно. Иначе к результату попадут только события, пришедшие вовремя, и цифры исказятся.</div>
+      </div>
+
+      <div class="blocklabel">Схема</div>
+      <pre class="code"><code>Tumbling (не пересекаются):
+  |--1min--|--1min--|--1min--|
+  12:00    12:01    12:02
+
+Sliding (окно 5 мин, шаг 1 мин):
+  [12:00......12:05]
+     [12:01......12:06]
+        [12:02......12:07]
+
+Session (разрыв 30 мин):
+  click click click .....(30м тишины)..... click click
+  |&lt;--- сессия 1 ---&gt;                     |&lt;-- сессия 2 --&gt;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Разделяйте два вопроса: «к какому моменту относится событие» (event time) и «когда мы его увидели» (processing time). Как только вы это проговариваете вслух, интервьюер обычно сразу переходит к watermark — значит, база пройдена.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Watermark и exactly-once</h2>
+      <p>Как дождаться опоздавших и не потерять и не удвоить данные.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое watermark и как выбрать его задержку?</li>
+        <li>Что означает exactly-once и как оно достигается?</li>
+        <li>Разница между at-least-once и exactly-once?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое watermark?</div>
+        <div class="a">Порог, который говорит системе: «события с event time меньше этого значения уже почти наверняка не придут». По достижении watermark окно закрывается и считается финальный результат. Задержка watermark — компромисс: больше ждём — точнее, но выше латентность и объём состояния.</div>
+      </div>
+      <div class="qa">
+        <div class="q">at-least-once vs exactly-once?</div>
+        <div class="a"><b>at-least-once</b> — событие обработано минимум один раз, но при сбое возможно дублирование. <b>at-most-once</b> — не более одного раза, но возможно потерять. <b>exactly-once</b> — ровно один раз, самый сложный: требует транзакционности или идемпотентности на стыке чтения, обработки и записи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как достигается exactly-once?</div>
+        <div class="a">Двумя путями. Первый — транзакционный: checkpoint состояния и запись в приёмник в одной транзакции (Kafka transactions + Flink two-phase commit). Второй — идемпотентный приёмник: даже если событие придёт дважды, запись в target не задублируется (upsert по ключу). Второй путь проще и часто предпочтительнее.</div>
+      </div>
+
+      <div class="blocklabel">Схема</div>
+      <pre class="code"><code>Watermark = max(event_time) - allowed_delay
+
+  событие с event_time=12:04
+  watermark доходит до 12:04 - 5мин = 11:59
+  окно [11:55..12:00) закрывается
+  событие 12:04 попадает в окно [12:00..12:05)
+
+exactly-once через идемпотентный sink:
+  job --(at-least-once)--> sink
+  sink: UPSERT по (event_id)  =&gt; дубли не страшны</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Простой и сильный ответ: «гарантирую at-least-once доставку, а ровно-один-раз делаю идемпотентным приёмником». Это дешевле и надёжнее, чем гнаться за транзакционным exactly-once end-to-end, который требует поддержки во всех звеньях.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Идемпотентный sink</h2>
+      <p>Как писать в приёмник так, чтобы дубли не появлялись.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как сделать приёмник идемпотентным?</li>
+        <li>Что делать с поздними и повторными событиями?</li>
+        <li>Как проверить, что дублей нет?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как сделать sink идемпотентным?</div>
+        <div class="a">Каждому событию нужен стабильный уникальный ключ (event_id, или бизнес-ключ + время). Тогда запись превращается в upsert: повторная вставка того же ключа перезаписывает, а не добавляет. Для агрегатов — перезапись окна/партиции целиком вместо инкремента.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что делать с опоздавшими событиями?</div>
+        <div class="a">Если окно ещё не закрыто watermark-ом — учитываем обычным образом. Если закрыто — либо отбрасываем (и логируем в dead-letter), либо, при поддержке allowed lateness, обновляем закрытое окно. Важно зафиксировать политику и понимать, как она влияет на цифры.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как убедиться, что дублей нет?</div>
+        <div class="a">Мержить по ключу, а не аппендить; хранить в агрегатах уникальный источник (например, число различных event_id). Регулярно проверять: <code>count(*)</code> против <code>count(distinct key)</code>. Расхождение — признак неидемпотентной записи.</div>
+      </div>
+
+      <div class="blocklabel">Схема</div>
+      <pre class="code"><code>-- неидемпотентно (append, дубли при retry)
+INSERT INTO events_sink SELECT * FROM new_events;
+
+-- идемпотентно (upsert по ключу)
+MERGE INTO events_sink t
+USING new_events s
+ON t.event_id = s.event_id
+WHEN MATCHED THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT ...;
+
+-- контроль дублей
+SELECT count(*) AS rows, count(DISTINCT event_id) AS uniq
+FROM events_sink;   -- rows == uniq</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Append в sink и надежда на «ровно один раз» — при retry получаете дубли.</li>
+        <li>Нестабильный ключ (генерация uuid на каждый ретрай) — upsert не срабатывает.</li>
+        <li>Инкрементальный счётчик без учёта повторных событий — метрика разъезжается.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Идемпотентность — самый практичный инструмент в streaming. Вместо сложных транзакций end-to-end достаточно стабильного ключа и upsert. Тогда любые ретраи и дубли в источнике безвредны.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Разговор о batch и streaming — это всегда разговор о компромиссах. Начинайте с требования к свежести: если бизнес живёт с данными суточной давности, batch дешевле и проще; streaming оправдан лишь там, где решение зависит от событий в реальном времени.</p>
+      <p class="lead">Две опоры корректной потоковой обработки — <b>event time с watermark</b> (чтобы правильно учитывать опоздавшие события) и <b>идемпотентный приёмник</b> (чтобы повторы и ретраи не дублировали данные). Вместе они дают практически достижимый exactly-once без тяжёлых транзакций end-to-end.</p>
+      <p class="lead">А между Lambda и Kappa выбор сегодня чаще в пользу Kappa: одна логика, replay для backfill. Lambda оставляйте для случаев, когда потоковый движок не тянет исторические объёмы.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

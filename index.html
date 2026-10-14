@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Data Engineer — подготовка к интервью</title>
+<script>
+  /* Тема применяется до отрисовки, чтобы не было мигания. */
+  (function () {
+    var t = "beige";
+    try {
+      var s = localStorage.getItem("de-theme");
+      if (s === "dark" || s === "beige") { t = s; }
+    } catch (e) {}
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<style>
+  :root, html[data-theme="beige"]{
+    --chrome:#f4efe4;
+    --chrome-2:#efe7d7;
+    --line:#e2d9c6;
+    --text:#26221a;
+    --muted:#6c6456;
+    --gold:#9c7614;
+    --frame:#fffdf9;
+    --scroll:#cfc4ab;
+    --accent-line:#e7d6ac;
+    --paper:#fffdf9;
+    --outside:#e7dfcd;
+  }
+  html[data-theme="dark"]{
+    --chrome:#12161c;
+    --chrome-2:#1b212a;
+    --line:#2a323d;
+    --text:#e9eef3;
+    --muted:#93a0ad;
+    --gold:#d4a24e;
+    --frame:#12161c;
+    --scroll:#333d49;
+    --accent-line:#4a3d24;
+    --paper:#1a2029;
+    --outside:#0b0e13;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--outside);
+    color:var(--text);
+    font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    overflow:hidden;
+    transition:background .2s ease,color .2s ease;
+  }
+
+  .app{
+    height:100%;
+    max-width:1440px;
+    margin:0 auto;
+    display:flex;
+    flex-direction:column;
+    background:var(--chrome);
+    border-left:1px solid var(--line);
+    border-right:1px solid var(--line);
+  }
+
+  /* мобильная верхняя панель (видна только на узких экранах) */
+  .mobile-bar{display:none}
+  .icon-btn{
+    appearance:none;
+    background:transparent;
+    border:1px solid var(--line);
+    color:var(--text);
+    width:42px;
+    height:36px;
+    border-radius:10px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+  }
+  .icon-btn:hover{color:var(--gold);border-color:var(--gold)}
+  .icon-btn svg{width:20px;height:20px}
+
+  /* ---------- меню слева ---------- */
+  aside.sidebar{
+    flex:0 0 272px;
+    width:272px;
+    display:flex;
+    flex-direction:column;
+    background:var(--chrome);
+    border-right:1px solid var(--line);
+    overflow:hidden;
+  }
+  .side-top{
+    flex:0 0 auto;
+    padding:14px 14px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  .theme-switch{
+    display:flex;
+    width:100%;
+    gap:2px;
+    padding:3px;
+    background:var(--chrome-2);
+    border:1px solid var(--line);
+    border-radius:999px;
+  }
+  .theme-switch button{
+    flex:1 1 0;
+    appearance:none;
+    border:0;
+    background:transparent;
+    cursor:pointer;
+    height:30px;
+    border-radius:999px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    color:var(--muted);
+    transition:background .15s ease,color .15s ease;
+  }
+  .theme-switch button:hover{color:var(--text)}
+  .theme-switch button.active{background:var(--chrome);color:var(--gold)}
+  .theme-switch svg{width:16px;height:16px}
+
+  .side-nav{
+    flex:1 1 auto;
+    overflow-y:auto;
+    padding:6px 12px 18px;
+    scrollbar-width:thin;
+  }
+  .side-nav{scrollbar-width:thin;scrollbar-color:var(--accent-line) transparent}
+  .side-nav::-webkit-scrollbar{width:11px}
+  .side-nav::-webkit-scrollbar-track{background:transparent}
+  .side-nav::-webkit-scrollbar-thumb{
+    background:var(--line);
+    border-radius:999px;
+    border:3px solid var(--chrome);
+    background-clip:padding-box;
+  }
+  .side-nav::-webkit-scrollbar-thumb:hover{
+    background:var(--accent-line);
+    border:3px solid var(--chrome);
+    background-clip:padding-box;
+  }
+
+  /* строки меню с отметкой «освоено» */
+  .nav-row{display:flex;align-items:center;gap:2px}
+  .nav-row button.nav-item{flex:1 1 auto;width:auto}
+  button.nav-check{
+    flex:0 0 auto;
+    appearance:none;border:0;background:transparent;cursor:pointer;
+    width:30px;height:30px;border-radius:8px;
+    display:inline-flex;align-items:center;justify-content:center;
+    color:var(--muted);
+  }
+  button.nav-check:hover{background:var(--chrome-2)}
+  button.nav-check .mark{
+    width:18px;height:18px;border-radius:50%;
+    border:1.5px solid var(--line);
+    display:inline-flex;align-items:center;justify-content:center;
+    font-size:11px;line-height:1;color:transparent;
+    transition:background .15s ease,border-color .15s ease,color .15s ease;
+  }
+  button.nav-check.read .mark{background:var(--gold);border-color:var(--gold);color:#fff}
+  button.nav-item.is-read .txt{opacity:.5;text-decoration:line-through;text-decoration-color:var(--muted)}
+
+  /* статистика и экспорт/импорт отметок */
+  .side-foot{
+    flex:0 0 auto;
+    border-top:1px solid var(--line);
+    padding:12px;
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .read-stat{font-size:12.5px;color:var(--muted)}
+  .read-stat b{color:var(--gold)}
+  .read-actions{display:flex;gap:6px}
+  .read-actions button{
+    flex:1 1 0;appearance:none;font-family:inherit;font-size:12px;font-weight:600;
+    color:var(--text);background:var(--chrome-2);border:1px solid var(--line);
+    border-radius:9px;padding:7px 8px;cursor:pointer;
+  }
+  .read-actions button:hover{border-color:var(--gold);color:var(--gold)}
+
+  .nav-search{width:100%;appearance:none;font-family:inherit;font-size:13px;color:var(--text);background:var(--chrome-2);border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin:0 0 8px}
+  .nav-tools{display:flex;gap:6px;padding:6px 0 8px}
+  .nav-tools button{
+    flex:1 1 0;appearance:none;font-family:inherit;font-size:11.5px;font-weight:600;
+    color:var(--muted);background:var(--chrome-2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 8px;cursor:pointer;
+  }
+  .nav-tools button:hover{color:var(--gold);border-color:var(--gold)}
+
+  .menu-group{position:relative}
+  button.menu-head{
+    position:sticky;top:0;z-index:2;
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    width:100%;appearance:none;cursor:pointer;
+    background:var(--chrome);border:0;border-top:1px solid var(--line);
+    font-family:"Segoe UI",Arial,sans-serif;font-size:10.5px;font-weight:700;
+    letter-spacing:.15em;text-transform:uppercase;color:var(--muted);
+    padding:11px 12px 9px;margin-top:6px;
+  }
+  button.menu-head:hover{color:var(--text)}
+  .menu-caret{font-size:10px;opacity:.75;transition:transform .18s ease}
+  .menu-group.open .menu-caret{transform:rotate(180deg)}
+  .menu-panel{display:none;padding-bottom:4px}
+  .menu-group.open .menu-panel{display:block}
+
+  button.nav-item{
+    width:100%;
+    appearance:none;
+    border:1px solid transparent;
+    background:transparent;
+    color:var(--text);
+    font-family:inherit;
+    font-size:13.5px;
+    font-weight:600;
+    line-height:1.4;
+    text-align:left;
+    padding:8px 12px;
+    border-radius:10px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    position:relative;
+    transition:background .12s ease,color .12s ease;
+  }
+  button.nav-item .dot{
+    flex:0 0 auto;
+    width:7px;height:7px;
+    border-radius:50%;
+    background:var(--cat,var(--muted));
+    opacity:.95;
+  }
+  button.nav-item:hover{background:var(--chrome-2)}
+  button.nav-item.active{background:var(--chrome-2);color:var(--gold)}
+  button.nav-item.active .dot{opacity:1}
+  button.nav-item.active::before{
+    content:"";
+    position:absolute;left:0;top:9px;bottom:9px;width:3px;
+    border-radius:0 3px 3px 0;background:var(--gold);
+  }
+
+  /* затемнение под выдвижным меню */
+  .scrim{display:none}
+
+  /* ---------- контент ---------- */
+  main#stage{
+    position:relative;
+    z-index:0;
+    flex:1 1 auto;
+    min-height:0;
+    background:var(--frame);
+  }
+  iframe.frame{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    border:0;
+    display:none;
+    background:var(--frame);
+  }
+  iframe.frame.active{display:block}
+
+  /* ---------- верхнее меню (десктоп) ---------- */
+  .topbar{display:none}
+
+  @media (min-width:721px) and (hover:hover) and (pointer:fine){
+    aside.sidebar{display:none}
+
+    .topbar{
+      position:sticky;top:0;z-index:1000;
+      display:flex;align-items:stretch;justify-content:space-between;gap:16px;
+      flex:0 0 auto;padding:0 18px;
+      background:var(--chrome);border-bottom:1px solid var(--line);
+      transform:translateZ(0);
+    }
+    .topbar-menu{display:flex;align-items:stretch;min-width:0}
+    .topbar-side{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+    .topbar-side .theme-switch{width:auto}
+    .topbar-side .side-foot{
+      flex-direction:row;align-items:center;gap:12px;
+      border-top:0;padding:0;margin:0;
+    }
+    .topbar-side .read-stat{white-space:nowrap}
+    .topbar-side .read-actions{gap:6px}
+    .topbar-side .read-actions button{padding:6px 10px}
+
+    .topbar #nav{
+      display:flex;flex-direction:row;align-items:stretch;gap:2px;
+      padding:0;overflow:visible;
+    }
+    .topbar #nav .nav-tools{display:none}
+    .topbar #nav .nav-search{width:200px;max-width:200px;margin:0 8px 0 0;padding:6px 10px}
+    .topbar #nav .nav-row{display:flex}
+
+    .topbar #nav .menu-group{position:relative;display:flex;align-items:stretch}
+    .topbar #nav > .nav-row > .nav-item,
+    .topbar #nav > .menu-group > .menu-head{
+      position:static;width:auto;margin:0;
+      display:inline-flex;align-items:center;gap:6px;
+      padding:14px 12px;border:0;border-bottom:2px solid transparent;
+      background:transparent;border-radius:0;
+      font-family:inherit;font-size:13px;font-weight:600;
+      letter-spacing:0;text-transform:none;color:var(--muted);
+    }
+    .topbar #nav > .nav-row > .nav-item:hover,
+    .topbar #nav > .menu-group > .menu-head:hover{
+      color:var(--text);border-bottom-color:var(--gold);
+    }
+    .topbar #nav > .nav-row > .nav-item.active{
+      color:var(--gold);background:transparent;border-bottom-color:var(--gold);
+    }
+    .topbar #nav > .nav-row > .nav-item.active::before{display:none}
+
+    .topbar #nav .menu-panel{
+      position:absolute;top:100%;left:0;
+      display:none;min-width:290px;max-width:400px;max-height:70vh;overflow:auto;
+      background:var(--paper);border:1px solid var(--line);
+      border-radius:0 0 12px 12px;box-shadow:0 16px 34px rgba(0,0,0,.22);
+      padding:8px;z-index:1200;
+    }
+    .topbar #nav .menu-group:hover .menu-panel,
+    .topbar #nav .menu-group:focus-within .menu-panel{display:block}
+  }
+
+  /* ---------- нижняя панель (смартфон в альбомной ориентации) ---------- */
+  .app-foot{display:none}
+  .foot-book{display:flex;align-items:center;gap:8px}
+  .foot-read,.foot-top{
+    appearance:none;font-family:inherit;font-size:12.5px;font-weight:600;
+    color:var(--text);background:var(--chrome-2);border:1px solid var(--line);
+    border-radius:999px;padding:7px 12px;cursor:pointer;
+  }
+  .foot-read.read{background:var(--gold);border-color:var(--gold);color:var(--paper)}
+  .foot-prog{font-family:"Segoe UI",Arial,sans-serif;font-size:12.5px;font-weight:700;color:var(--gold);white-space:nowrap}
+  .app-foot .theme-switch{width:auto}
+
+  @media (orientation: landscape) and (max-height: 560px) and (pointer: coarse){
+    .mobile-bar{display:none}
+    .app-foot{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      flex:0 0 auto;
+      padding:8px 12px calc(8px + env(safe-area-inset-bottom));
+      background:var(--chrome);border-top:1px solid var(--line);
+    }
+  }
+
+  /* ---------- мобильная версия ---------- */
+  @media (max-width:720px), (hover:none) and (pointer:coarse){
+    .app{max-width:none;border:0;flex-direction:column}
+
+    .mobile-bar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      flex:0 0 auto;
+      padding:8px 12px;
+      padding-top:calc(8px + env(safe-area-inset-top));
+      background:var(--chrome);
+      border-bottom:1px solid var(--line);
+    }
+    .mobile-bar .theme-switch{width:auto}
+
+    aside.sidebar{
+      position:fixed;
+      top:0;left:0;bottom:0;
+      width:min(84vw,320px);
+      border-right:1px solid var(--line);
+      transform:translateX(-100%);
+      transition:transform .22s ease;
+      z-index:50;
+      box-shadow:0 0 30px rgba(0,0,0,.35);
+    }
+    .app.nav-open aside.sidebar{transform:translateX(0)}
+
+    .side-top{display:none}
+    .side-nav{padding:14px 12px calc(18px + env(safe-area-inset-bottom))}
+
+    .scrim{
+      display:block;
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,.45);
+      opacity:0;
+      visibility:hidden;
+      transition:opacity .2s ease,visibility .2s ease;
+      z-index:40;
+    }
+    .app.nav-open .scrim{opacity:1;visibility:visible}
+
+    main#stage{flex:1 1 auto;min-height:0}
+  }
+</style>
+</head>
+<body>
+
+  <div class="app" id="app">
+
+    <div class="mobile-bar">
+      <button class="icon-btn" id="menuBtn" type="button" aria-label="Меню" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+      </button>
+      <div class="theme-switch" role="group" aria-label="Тема оформления">
+        <button type="button" data-value="beige" title="Светлая тема" aria-label="Светлая тема">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+        </button>
+        <button type="button" data-value="dark" title="Тёмная тема" aria-label="Тёмная тема">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <header class="topbar" id="topbar">
+      <div class="topbar-menu" id="menuSlot"></div>
+      <div class="topbar-side" id="sideSlot">
+        <div class="theme-switch" role="group" aria-label="Тема оформления">
+          <button type="button" data-value="beige" title="Светлая тема" aria-label="Светлая тема">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+          </button>
+          <button type="button" data-value="dark" title="Тёмная тема" aria-label="Тёмная тема">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="side-top">
+        <div class="theme-switch" role="group" aria-label="Тема оформления">
+          <button type="button" data-value="beige" title="Светлая тема" aria-label="Светлая тема">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+          </button>
+          <button type="button" data-value="dark" title="Тёмная тема" aria-label="Тёмная тема">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+          </button>
+        </div>
+      </div>
+      <nav class="side-nav" id="nav">
+        <input class="nav-search" id="navSearch" type="text" placeholder="Поиск по темам…" autocomplete="off">
+        <div class="nav-tools">
+          <button type="button" id="expandAll">Развернуть всё</button>
+          <button type="button" id="collapseAll">Свернуть всё</button>
+        </div>
+      </nav>
+      <div class="side-foot" id="sideFoot">
+        <div class="read-stat">Освоено: <b id="readCount">0</b> из <span id="readTotal">63</span></div>
+      </div>
+    </aside>
+
+    <div class="scrim" id="scrim"></div>
+
+    <main id="stage"></main>
+
+    <div class="app-foot" id="appFoot">
+      <button type="button" class="icon-btn" id="footMenu" aria-label="Меню">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+      </button>
+      <div class="foot-book" id="footBook">
+        <button type="button" class="foot-read" id="footRead">Освоено</button>
+        <span class="foot-prog" id="footProg">0%</span>
+        <button type="button" class="foot-top" id="footTop">Наверх</button>
+      </div>
+      <div class="theme-switch" role="group" aria-label="Тема оформления">
+        <button type="button" data-value="beige" title="Светлая тема" aria-label="Светлая тема">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+        </button>
+        <button type="button" data-value="dark" title="Тёмная тема" aria-label="Тёмная тема">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+<script>
+    const catalog = [
+    { name: "Каталог", color: "#5b8ab0", items: [ { title: "📚 Каталог", file: "catalog.html" } ] },
+    { name: "Обзор", color: "#c9a24a", items: [
+      { title: "Как проходит интервью DE", file: "how-interview.html" }
+    ]},
+    { name: "SQL", color: "#4f9e8a", items: [
+      { title: "Оконные функции", file: "sql-window-functions.html" },
+      { title: "JOIN и агрегации", file: "sql-joins.html" },
+      { title: "Оптимизация запросов", file: "sql-optimization.html" },
+      { title: "NULL и типы данных", file: "sql-null-types.html" },
+      { title: "Задачи с решениями", file: "sql-tasks.html" }
+    ]},
+    { name: "Python", color: "#6d7fb8", items: [
+      { title: "pandas: join и groupby", file: "python-pandas.html" },
+      { title: "Алгоритмы и структуры данных", file: "python-algorithms.html" },
+      { title: "Итераторы и генераторы", file: "python-iterators.html" },
+      { title: "Типичные вопросы", file: "python-questions.html" }
+    ]},
+    { name: "Spark", color: "#8a6fc4", items: [
+      { title: "Архитектура Spark", file: "spark-architecture.html" },
+      { title: "Партиционирование и shuffle", file: "spark-partitioning.html" },
+      { title: "Тюнинг и перекос данных", file: "spark-tuning.html" },
+      { title: "DataFrame и RDD", file: "spark-dataframe-rdd.html" },
+      { title: "Join-стратегии", file: "spark-joins.html" }
+    ]},
+    { name: "System Design", color: "#c47a3a", items: [
+      { title: "Проектирование ETL/ELT", file: "sd-etl.html" },
+      { title: "Batch и Streaming", file: "sd-batch-streaming.html" },
+      { title: "Хранилища и CAP", file: "sd-storage-cap.html" },
+      { title: "Масштабирование и SLA", file: "sd-scaling.html" },
+      { title: "Пример: спроектировать пайплайн", file: "sd-example.html" }
+    ]}
+  ];
+
+  const KEY = "de-theme";
+  const appEl     = document.getElementById("app");
+  const navEl     = document.getElementById("nav");
+  const stage     = document.getElementById("stage");
+  const scrimEl   = document.getElementById("scrim");
+  const menuBtn   = document.getElementById("menuBtn");
+  const frames    = [];
+  const buttons   = [];
+  const items     = [];
+  const readFiles = [];
+  const checkByFile = {};
+
+  function readTheme() {
+    try {
+      var s = localStorage.getItem(KEY);
+      return (s === "dark" || s === "beige") ? s : null;
+    } catch (e) { return null; }
+  }
+  function saveTheme(t) { try { localStorage.setItem(KEY, t); } catch (e) {} }
+
+  let currentTheme = document.documentElement.getAttribute("data-theme") || readTheme() || "beige";
+
+  // ---- меню по категориям + фреймы ----
+  let idx = 0;
+  const openCats = loadOpenCats();
+  const catSections = [];
+  catalog.forEach(function (cat) {
+    const isCatalogCat = (cat.name === "Каталог");
+    let panel = null;
+    if (!isCatalogCat) {
+      const wrap = document.createElement("div");
+      wrap.className = "menu-group" + (openCats[cat.name] ? " open" : "");
+
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "menu-head";
+      head.innerHTML = '<span class="menu-head-txt"></span><span class="menu-caret">▾</span>';
+      head.querySelector(".menu-head-txt").textContent = cat.name;
+      head.addEventListener("click", function () {
+        const open = wrap.classList.toggle("open");
+        openCats[cat.name] = open;
+        saveOpenCats(openCats);
+      });
+      wrap.appendChild(head);
+
+      panel = document.createElement("div");
+      panel.className = "menu-panel";
+      wrap.appendChild(panel);
+      navEl.appendChild(wrap);
+
+      catSections.push({ name: cat.name, wrap: wrap, head: head });
+    }
+
+    cat.items.forEach(function (book) {
+      const i = idx++;
+      items.push(book);
+
+      const btn = document.createElement("button");
+      btn.className = "nav-item" + (i === 0 ? " active" : "");
+      btn.type = "button";
+      btn.style.setProperty("--cat", cat.color);
+      btn.innerHTML = '<span class="dot"></span><span class="txt"></span>';
+      btn.querySelector(".txt").textContent = book.title;
+      btn.addEventListener("click", function () { activate(i); });
+      buttons.push(btn);
+
+      const row = document.createElement("div");
+      row.className = "nav-row";
+      row.appendChild(btn);
+
+      if (book.file !== "catalog.html" && !book.noCheck) {
+        const chk = document.createElement("button");
+        chk.type = "button";
+        chk.className = "nav-check";
+        chk.innerHTML = '<span class="mark">✓</span>';
+        chk.title = "Отметить освоенной";
+        chk.addEventListener("click", function () { toggleRead(book.file); });
+        checkByFile[book.file] = chk;
+        readFiles.push(book.file);
+        row.appendChild(chk);
+      }
+
+      (panel || navEl).appendChild(row);
+
+      const frame = document.createElement("iframe");
+      frame.className = "frame" + (i === 0 ? " active" : "");
+      frame.setAttribute("title", book.title);
+      frame.dataset.src = book.file;
+      stage.appendChild(frame);
+      frames.push(frame);
+    });
+  });
+
+  function setAllCats(open) {
+    catSections.forEach(function (s) {
+      s.wrap.classList.toggle("open", open);
+      openCats[s.name] = open;
+    });
+    saveOpenCats(openCats);
+  }
+  document.getElementById("expandAll").addEventListener("click", function () { setAllCats(true); });
+  document.getElementById("collapseAll").addEventListener("click", function () { setAllCats(false); });
+
+  function fileUrl(file) {
+    return encodeURI(file) + "?theme=" + currentTheme;
+  }
+
+  function postTheme(frame) {
+    if (!frame || !frame.getAttribute("src") || !frame.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage({ type: "de-theme", theme: currentTheme }, "*");
+    } catch (e) {}
+  }
+  function broadcast() { frames.forEach(postTheme); }
+
+  function activate(index) {
+    buttons.forEach(function (b, k) { b.classList.toggle("active", k === index); });
+    frames.forEach(function (f, k) {
+      const on = (k === index);
+      f.classList.toggle("active", on);
+      if (on) {
+        if (!f.getAttribute("src")) {
+          f.setAttribute("src", fileUrl(f.dataset.src));
+        } else {
+          postTheme(f);
+          postRead(f);
+        }
+      }
+    });
+    currentBookFile = (items[index] && items[index].file !== "catalog.html") ? items[index].file : null;
+    if (footBook) footBook.style.display = currentBookFile ? "flex" : "none";
+    if (footProg) footProg.textContent = "0%";
+    refreshFootRead();
+    closeNav();
+  }
+
+  // ---- тема ----
+  function refreshSwitch() {
+    document.querySelectorAll(".theme-switch button").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-value") === currentTheme);
+    });
+  }
+  function setTheme(t) {
+    if (t !== "dark" && t !== "beige") return;
+    currentTheme = t;
+    document.documentElement.setAttribute("data-theme", t);
+    saveTheme(t);
+    refreshSwitch();
+    broadcast();
+  }
+  document.addEventListener("click", function (e) {
+    const b = e.target.closest ? e.target.closest(".theme-switch button") : null;
+    if (b) setTheme(b.getAttribute("data-value"));
+  });
+
+  // ---- выдвижное меню ----
+  function openNav() {
+    appEl.classList.add("nav-open");
+    menuBtn.setAttribute("aria-expanded", "true");
+  }
+  function closeNav() {
+    appEl.classList.remove("nav-open");
+    menuBtn.setAttribute("aria-expanded", "false");
+  }
+  menuBtn.addEventListener("click", function () {
+    appEl.classList.contains("nav-open") ? closeNav() : openNav();
+  });
+  scrimEl.addEventListener("click", closeNav);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeNav();
+  });
+
+  // синхронизация с содержимым вкладок (тема и отметки «освоено»)
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d) return;
+    if (d.type === "de-theme" && (d.theme === "dark" || d.theme === "beige")) {
+      if (d.theme !== currentTheme) { setTheme(d.theme); }
+    } else if (d.type === "de-done" && Array.isArray(d.list)) {
+      setReadList(d.list);
+      broadcastRead();
+    } else if (d.type === "book-progress" && d.file && d.file === currentBookFile) {
+      if (footProg) footProg.textContent = d.total ? (d.pct + "% · глава " + d.idx + "/" + d.total) : (d.pct + "%");
+    }
+  });
+
+  // ---- состояние раскрытых категорий меню ----
+  function loadOpenCats() {
+    try {
+      var raw = localStorage.getItem("de-menu-open");
+      if (raw === null) {
+        var def = {};
+        catalog.forEach(function (c) { if (c.name !== "Каталог") { def[c.name] = true; } });
+        return def;
+      }
+      return JSON.parse(raw) || {};
+    } catch (e) { return {}; }
+  }
+  function saveOpenCats(o) {
+    try { localStorage.setItem("de-menu-open", JSON.stringify(o)); } catch (e) {}
+  }
+
+  // ---- отметки «освоено» ----
+  const READ_KEY = "de-done";
+  const readCountEl = document.getElementById("readCount");
+  const readTotalEl = document.getElementById("readTotal");
+  const footBook  = document.getElementById("footBook");
+  const footRead  = document.getElementById("footRead");
+  const footProg  = document.getElementById("footProg");
+  const footTop   = document.getElementById("footTop");
+  const footMenu  = document.getElementById("footMenu");
+  let currentBookFile = null;
+
+  function loadRead() {
+    try { return JSON.parse(localStorage.getItem(READ_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function saveRead(o) {
+    try { localStorage.setItem(READ_KEY, JSON.stringify(o)); } catch (e) {}
+  }
+  let readMap = loadRead();
+
+  function refreshRead() {
+    readTotalEl.textContent = String(readFiles.length);
+    let n = 0;
+    readFiles.forEach(function (file) {
+      const on = !!readMap[file];
+      if (on) n++;
+      const chk = checkByFile[file];
+      if (chk) {
+        chk.classList.toggle("read", on);
+        chk.title = on ? "Снять отметку" : "Отметить освоенной";
+        const item = chk.parentElement.querySelector(".nav-item");
+        if (item) item.classList.toggle("is-read", on);
+      }
+    });
+    readCountEl.textContent = String(n);
+    refreshFootRead();
+  }
+  function refreshFootRead() {
+    if (!footRead) return;
+    const on = !!(currentBookFile && readMap[currentBookFile]);
+    footRead.classList.toggle("read", on);
+    footRead.textContent = on ? "Освоено ✓" : "Освоено";
+  }
+  function toggleRead(file) {
+    if (readMap[file]) { delete readMap[file]; } else { readMap[file] = 1; }
+    saveRead(readMap);
+    refreshRead();
+    broadcastRead();
+  }
+  function setReadList(list) {
+    readMap = {};
+    (list || []).forEach(function (f) { readMap[f] = 1; });
+    saveRead(readMap);
+    refreshRead();
+  }
+  function postRead(frame) {
+    if (!frame || !frame.getAttribute("src") || !frame.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage({ type: "de-done", list: Object.keys(readMap) }, "*");
+    } catch (e) {}
+  }
+  function broadcastRead() { frames.forEach(postRead); }
+
+  function postToActiveBook(msg) {
+    if (!currentBookFile) return;
+    items.forEach(function (b, k) {
+      if (b.file === currentBookFile && frames[k] && frames[k].contentWindow) {
+        try { frames[k].contentWindow.postMessage(msg, "*"); } catch (e) {}
+      }
+    });
+  }
+  if (footMenu) footMenu.addEventListener("click", function () {
+    appEl.classList.contains("nav-open") ? closeNav() : openNav();
+  });
+  if (footRead) footRead.addEventListener("click", function () {
+    if (currentBookFile) toggleRead(currentBookFile);
+  });
+  if (footTop) footTop.addEventListener("click", function () {
+    postToActiveBook({ type: "book-scroll-top" });
+  });
+
+  // ---- адаптивная раскладка: меню сверху (десктоп) или в панели (смартфон) ----
+  const footEl = document.getElementById("sideFoot");
+  const sidebarEl = document.getElementById("sidebar");
+  const menuSlot = document.getElementById("menuSlot");
+  const sideSlot = document.getElementById("sideSlot");
+  const mqSmall = window.matchMedia("(max-width:720px)");
+  const mqTouch = window.matchMedia("(hover:none) and (pointer:coarse)");
+  function isMobileLayout() { return mqSmall.matches || mqTouch.matches; }
+
+  function applyLayout() {
+    const mobile = isMobileLayout();
+    if (mobile) {
+      sidebarEl.appendChild(navEl);
+      sidebarEl.appendChild(footEl);
+    } else {
+      menuSlot.appendChild(navEl);
+      sideSlot.insertBefore(footEl, sideSlot.firstChild);
+    }
+    catSections.forEach(function (s) {
+      var t = s.head.querySelector(".menu-head-txt");
+      if (t) { t.textContent = mobile ? s.name : s.name.split(" ")[0]; }
+    });
+  }
+  [mqSmall, mqTouch].forEach(function (m) {
+    if (m.addEventListener) { m.addEventListener("change", applyLayout); }
+    else if (m.addListener) { m.addListener(applyLayout); }
+  });
+  applyLayout();
+
+  refreshRead();
+  // ---- поиск по темам ----
+  (function () {
+    var searchEl = document.getElementById("navSearch");
+    if (!searchEl || !buttons.length) return;
+    searchEl.addEventListener("input", function () {
+      var q = this.value.trim().toLowerCase();
+      items.forEach(function (book, k) {
+        var row = buttons[k] && buttons[k].parentElement;
+        if (!row || row.classList.contains("menu-head") || row.classList.contains("menu-sub")) return;
+        var hay = (book.title + " " + book.file).toLowerCase();
+        row.style.display = (!q || hay.indexOf(q) >= 0) ? "" : "none";
+      });
+      catSections.forEach(function (s) {
+        var any = false;
+        var rows = s.wrap.querySelectorAll(".nav-row");
+        for (var i = 0; i < rows.length; i++) { if (rows[i].style.display !== "none") { any = true; break; } }
+        s.wrap.style.display = any ? "" : "none";
+      });
+    });
+  })();
+
+  refreshSwitch();
+  activate(0);
+</script>
+
+</body>
+</html>

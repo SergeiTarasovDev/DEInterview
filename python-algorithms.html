@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Алгоритмы и структуры данных — Python · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Python</div>
+    <h1>Алгоритмы и структуры данных</h1>
+    <p class="subtitle">Сложность, хеш-таблицы, два указателя</p>
+    <div class="meta-row">
+      <span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">Алгоритмическая секция для DE ближе к обработке данных, чем к олимпиадам: подсчёт частот, поиск дублей, топ-K, группировка. Проверяют умение выбрать структуру под задачу и оценить, как решение масштабируется на миллионах строк.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Оценка сложности</a></li>
+      <li><a href="#s2">2. Структуры данных</a></li>
+      <li><a href="#s3">3. Хеш-таблицы и частоты</a></li>
+      <li><a href="#s4">4. Два указателя и sliding window</a></li>
+      <li><a href="#s5">5. Сортировка и топ-K</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Оценка сложности</h2>
+      <p>O(1), O(n), O(log n), O(n log n) — и зачем это на интервью.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что означает запись O(n) и O(1)?</li>
+        <li>Почему поиск в множестве быстрый, а в списке — медленный?</li>
+        <li>Как оценить сложность собственного решения?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое большая O?</div>
+        <div class="a">Это оценка того, как время работы растёт с размером входных данных, с точностью до константы. O(1) — время не зависит от n, O(n) — растёт линейно, O(log n) — логарифмически, O(n log n) — типична для сортировки, O(n²) — квадратично (вложенные циклы).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему поиск в dict/set — O(1)?</div>
+        <div class="a">Они основаны на хеш-таблице: по значению считается хеш, который указывает на «ячейку» почти напрямую. В списке же элемент ищут перебором — O(n). Отсюда классический приём: превратить список в множество, чтобы заменить поиск на константный.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему O(n²) — это плохо?</div>
+        <div class="a">При n в миллион квадрат — это 10¹² операций, что недопустимо медленно. Вложенный цикл по двум большим коллекциям почти всегда имеет линейную альтернативу через словарь или множеств: это и есть цель оптимизации.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>items = list(range(1000000))
+
+# O(n): перебор списка
+def has_linear(items, target):
+    return target in items
+
+# O(1) в среднем: проверка по множеству
+def has_fast(items, target):
+    unique = set(items)
+    return target in unique</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Оценивают константы, а не порядок роста — интервьюеру важна асимптотика.</li>
+        <li>Забывают про стоимость создания множества/словаря: O(n) один раз окупает себя при частых поисках.</li>
+        <li>Считают, что <code>x in list</code> — быстрая операция, и строят на ней решение.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Вслух оценивайте решение формулой: «это O(n) по времени и O(n) по памяти». Интервьюер ждёт не точную цифру, а понимание, как решение поведёт себя на росте данных.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Структуры данных</h2>
+      <p>list, dict, set, tuple — что и когда использовать.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем list отличается от set и dict?</li>
+        <li>Что общего у set и dict и почему они быстрые?</li>
+        <li>Когда список остаётся лучшим выбором?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">list, set, dict — в чём разница?</div>
+        <div class="a"><code>list</code> — упорядоченная последовательность с доступом по индексу, допускает дубли, поиск O(n). <code>set</code> — неупорядоченное множество уникальных значений, проверка вхождения O(1). <code>dict</code> — отображение ключ → значение, тоже O(1) в среднем по ключу.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему set и dict быстрые?</div>
+        <div class="a">Оба реализованы на хеш-таблице. Ключ хешируется, и по хешу почти сразу находится нужная ячейка. Плата за это — требование хешируемости ключа (неизменяемый тип) и то, что <code>set</code> не сохраняет порядок вставки как гарантию.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда брать список?</div>
+        <div class="a">Когда важны порядок, дубликаты или доступ по позиции. Например, поток событий, отсортированный результат, последовательность для двух указателей.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>events = ["login", "login", "purchase"]
+
+unique_events = set(events)          # {"login", "purchase"}
+first_seen = {}                      # порядок вставки сохраняется
+for e in events:
+    if e not in first_seen:
+        first_seen[e] = True
+
+seq = sorted(unique_events)          # обратно в список</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются положить в <code>set</code> или использовать как ключ <code>dict</code> изменяемый объект (например, список).</li>
+        <li>Ждут от <code>set</code> стабильного порядка — его там нет, если порядок важен, нужен список или <code>dict</code>.</li>
+        <li>Используют список там, где нужна частая проверка вхождения — получают O(n²).</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Простой тест на интервью: если нужен «вопрос: есть ли элемент / сколько раз» — это dict или set. Если «где он стоит и в каком порядке» — список.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Хеш-таблицы и частоты</h2>
+      <p>Подсчёт частот словарём, дубли и две суммы.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как посчитать частоту значений без pandas?</li>
+        <li>Как найти дубликаты в большом списке?</li>
+        <li>Как решить «две суммы» за один проход?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как посчитать частоты?</div>
+        <div class="a">Пройти по данным и инкрементировать счётчик в словаре. Это O(n) по времени и O(k) по памяти, где k — число уникальных ключей. На выходе — готовая основа для топ-K и фильтрации редких значений.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как найти дубликаты?</div>
+        <div class="a">Завести множество уже встреченных значений: если элемент уже там — это дубликат. Один проход, O(n). Альтернатива через частоты — собрать ключи со счётчиком больше единицы.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как решить «две суммы» (two sum)?</div>
+        <div class="a">За один проход храним в словаре уже встреченные значения и их позиции. Для текущего <code>x</code> проверяем, есть ли в словаре <code>target - x</code>. Это превращает наивный O(n²) в O(n).</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from collections import Counter
+
+countries = ["RU", "US", "RU", "DE", "US", "RU"]
+freq = Counter(countries)          # {"RU": 3, "US": 2, "DE": 1}
+
+def two_sum(nums, target):
+    seen = {}
+    for i, x in enumerate(nums):
+        if target - x in seen:
+            return (seen[target - x], i)
+        seen[x] = i
+    return None</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Считают частоты вложенным циклом — O(n²) вместо одного прохода.</li>
+        <li>В two sum сначала строят словарь полностью, забывая, что нужно избегать пары «элемент сам с собой».</li>
+        <li>Хранят в словаре не тот тип ключа: список или другой изменяемый объект как ключ вызовет ошибку.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Counter и обычный dict — рабочая лошадка DE-задач. Правило: если видите «сколько раз», «самый частый», «есть ли уже» — это словарь или множество, и решение почти всегда укладывается в один проход.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Два указателя и sliding window</h2>
+      <p>Линейные проходы по отсортированным и непрерывным данным.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Когда применим метод двух указателей?</li>
+        <li>Что такое скользящее окно и как его двигать?</li>
+        <li>Как найти подряд идущий отрезок с нужным свойством?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Два указателя — это когда?</div>
+        <div class="a">Когда данные отсортированы или важна пара «слева-справа». Двигая указатели навстречу или в одну сторону, за один проход проверяем все пары, не беря вложенный цикл. Классика — сумма пары в отсортированном массиве, слияние двух списков.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как работает sliding window?</div>
+        <div class="a">Окно — это непрерывный отрезок [left, right]. Правый указатель расширяет окно, левый поджимает его, когда условие нарушено. Такой проход линеен: каждый элемент входит и выходит из окна не более одного раза, итого O(n).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Пример на данных?</div>
+        <div class="a">Поиск самого длинного отрезка дней без пропусков, максимальная сумма за окно из k подряд идущих событий, подсчёт подписок в скользящем 7-дневном периоде.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>def max_sum_window(arr, k):
+    window = sum(arr[:k])
+    best = window
+    for right in range(k, len(arr)):
+        window += arr[right] - arr[right - k]
+        best = max(best, window)
+    return best
+
+# для двух указателей список должен быть отсортирован
+def pair_sum(sorted_nums, target):
+    left, right = 0, len(sorted_nums) - 1
+    while left &lt; right:
+        s = sorted_nums[left] + sorted_nums[right]
+        if s == target:
+            return (left, right)
+        if s &lt; target:
+            left += 1
+        else:
+            right -= 1
+    return None</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Применяют два указателя к неотсортированным данным там, где нужна сортировка.</li>
+        <li>Пересчитывают сумму окна заново на каждом шаге — теряют линейность.</li>
+        <li>Двигают левый и правый указатели не по правилу условия, а «на глаз», и получают пропуски.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Сигнал к скользящему окну — слова «подряд», «непрерывный отрезок», «за период из k». Сигнал к двум указателям — «отсортированный» и «пара». Назовите это вслух до написания кода — интервьюер ждёт именно распознавания паттерна.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Сортировка, группировка и топ-K</h2>
+      <p>O(n log n), группа по ключу и выбор самых больших.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Какова сложность сортировки и стабильна ли она?</li>
+        <li>Как сгруппировать элементы по ключу?</li>
+        <li>Как выбрать топ-K без полной сортировки?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Какая сложность у сортировки?</div>
+        <div class="a">У <code>sorted()</code> и <code>list.sort()</code> — O(n log n). Сортировка Timsort <b>стабильна</b>: равные элементы сохраняют исходный порядок. Это позволяет сортировать по нескольким ключам последовательно — сначала по второстепенному, потом по главному.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как сгруппировать элементы?</div>
+        <div class="a">Через словарь списков: ключ → перечень элементов. Если данные предварительно отсортированы по ключу, пригодится <code>itertools.groupby</code>, но он группирует только подряд идущие одинаковые ключи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как достать топ-K?</div>
+        <div class="a">Если K мало относительно n, полная сортировка избыточна — используют <code>heapq.nlargest</code> / <code>nsmallest</code>, работающие за O(n log K). Для K порядка n выгоднее обычная сортировка.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from collections import defaultdict
+import heapq
+
+logs = [("RU", 10), ("US", 7), ("RU", 4), ("DE", 9)]
+
+by_country = defaultdict(int)
+for country, cnt in logs:
+    by_country[country] += cnt
+
+top2 = heapq.nlargest(2, by_country.items(), key=lambda kv: kv[1])
+# [("RU", 14), ("DE", 9)]</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Сортируют весь массив, чтобы взять топ-3, — лишняя работа на больших данных.</li>
+        <li>Применяют <code>groupby</code> к несортированным данным и получают раздробленные группы.</li>
+        <li>Путают аргумент <code>key</code> сортировки с ключом словаря.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Топ-K — это вопрос о том, нужна ли полная сортировка. Если да — O(n log n), если K мало — куча за O(n log K). Умение задать уточняющий вопрос про размер K отличает уверенного кандидата.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Алгоритмическая секция для DE проверяет не скорость написания кода, а выбор инструмента. Хеш-таблица (dict/set) превращает квадратичные решения в линейные, а два указателя и скользящее окно закрывают задачи на непрерывные отрезки.</p>
+      <p class="lead">Начинайте любой ответ с двух вопросов: какая структура данных нужна и какова сложность решения. Оценка «O(n) по времени, O(n) по памяти» вслух ценится выше, чем молчаливо верный код.</p>
+      <p class="lead">И держите в голове связь с работой DE: подсчёт частот — это groupby, дедупликация — это distinct через set, топ-K — это ORDER BY LIMIT. Алгоритмы здесь не абстракция, а та же обработка данных, только в коде.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

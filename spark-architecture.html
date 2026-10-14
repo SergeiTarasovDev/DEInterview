@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Архитектура Spark — Spark · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Spark</div>
+    <h1>Архитектура Spark</h1>
+    <p class="subtitle">Driver, executors, DAG и ленивые вычисления</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Архитектура — первый вопрос почти на любом собеседовании по Spark. От кандидата ждут не пересказа слайдов, а понимания, где живут вычисления, почему «ничего не происходит» после трансформаций и как одна строка кода превращается в распределённый job.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Компоненты кластера</a></li>
+      <li><a href="#s2">2. Ленивые трансформации и действия</a></li>
+      <li><a href="#s3">3. Job, stage, task</a></li>
+      <li><a href="#s4">4. DAG и SparkSession</a></li>
+      <li><a href="#s5">5. Narrow и wide трансформации</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Компоненты кластера</h2>
+      <p>Driver, executors, cluster manager — кто за что отвечает.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем driver отличается от executor?</li>
+        <li>Где выполняется код пользователя, а где — сама обработка данных?</li>
+        <li>Какую роль играет cluster manager?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Driver и executors — в чём разница?</div>
+        <div class="a"><b>Driver</b> — управляющий узел: он запускает <code>main()</code>, строит план выполнения, планирует задачи и собирает результаты. <b>Executors</b> — рабочие JVM-процессы на воркерах: они держат данные в памяти и выполняют сами задачи. Драйвер оркестрирует, экзекьюторы считают.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что делает cluster manager?</div>
+        <div class="a">Выделяет ресурсы кластера под приложение: стартует executors, следит за их жизнеспособностью. Это может быть <b>Standalone</b>, <b>YARN</b>, <b>Kubernetes</b> или <b>Mesos</b>. Spark умеет работать с любым из них через один и тот же API.</div>
+      </div>
+      <div class="qa">
+        <div class="q">В каком режиме выполняется приложение?</div>
+        <div class="a">В <b>client mode</b> драйвер живёт на машине, откуда отправлена команда (удобно для отладки, но канал связи нестабилен). В <b>cluster mode</b> драйвер запускается внутри кластера (устойчивее, стандарт для продакшена).</div>
+      </div>
+
+      <ul class="keys">
+        <li>Драйвер — единая точка отказа: упал драйвер — упало всё приложение.</li>
+        <li>Executors независимы друг от друга и не общаются напрямую — только через драйвер и shuffle-сервис.</li>
+        <li>Данные в экзекьюторах живут в памяти и на локальном диске (spill), а не на драйвере.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Формулировка, которая нравится интервьюерам: «драйвер планирует, экзекьюторы исполняют, а cluster manager выдаёт ресурсы». Дальше уже можно детализировать по режимам запуска.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Ленивые трансформации и действия</h2>
+      <p>Почему ничего не считается, пока не вызвано действие.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем трансформация отличается от действия?</li>
+        <li>Почему <code>filter</code> и <code>select</code> не запускают вычисления?</li>
+        <li>Что такое ленивые вычисления и зачем они нужны?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Трансформация vs действие?</div>
+        <div class="a"><b>Трансформации</b> (<code>select</code>, <code>filter</code>, <code>withColumn</code>, <code>join</code>) только описывают, что нужно сделать, и возвращают новый DataFrame/RDD. <b>Действия</b> (<code>count</code>, <code>collect</code>, <code>show</code>, <code>write</code>, <code>foreach</code>) инициируют реальное вычисление и возвращают результат.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем нужна ленивость?</div>
+        <div class="a">Она даёт оптимизатору полную картину пайплайна. Spark видит всю цепочку и может объединить операции, отсечь ненужные колонки, поменять порядок фильтров и выбрать лучшую стратегию join. Плюс не выполняется работа, результат которой никто не запросил.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+spark = (
+    SparkSession.builder
+    .appName("demo")
+    .config("spark.executor.memory", "8g")
+    .getOrCreate()
+)
+
+df = (
+    spark.read.parquet("s3://bucket/events")
+    .filter(F.col("dt") == "2026-10-12")   # лениво
+    .select("user_id", "event")            # лениво
+)
+
+# до этой строки не выполнено ни одной задачи
+df.groupBy("event").count().show()         # действие запускает job</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Ждут, что после трансформации файлы уже прочитаны, — а физического чтения ещё нет.</li>
+        <li>Многократно вызывают действия на одном DataFrame без <code>cache</code>, пересчитывая весь пайплайн заново.</li>
+        <li>Путают <code>count()</code> (действие) и <code>select()</code> (трансформация) по «весу» операции.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Простой тест на понимание: спросите себя, «поедут ли данные по сети прямо сейчас». Если нет — это трансформация. Отсюда же растёт тема оптимизации и Catalyst.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Job, stage, task</h2>
+      <p>Иерархия работы: как действие превращается в параллельные задачи.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Какие уровни выполнения есть в Spark?</li>
+        <li>Сколько задач в одной стадии?</li>
+        <li>Почему стадии разделяются именно на shuffle?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Иерархия job/stage/task?</div>
+        <div class="a"><b>Job</b> — одно действие (например <code>count</code>). Внутри job строится DAG, который разбивается на <b>stages</b> по границам shuffle. Каждая стадия состоит из <b>tasks</b> — по одной на партицию данных. Task — минимальная единица работы, которую выполняет один executor-поток.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Сколько задач в стадии?</div>
+        <div class="a">Число задач равно числу партиций на входе стадии. Уменьшили партиции <code>coalesce</code> — уменьшили и параллелизм. Поэтому «один огромный файл» часто приводит к стадии из одной задачи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему граница стадии — это shuffle?</div>
+        <div class="a">Потому что после shuffle данные нужно полностью материализовать и перераспределить по сети, прежде чем начать следующую стадию. До shuffle всё можно считать в одном проходе (pipeline), после — нужен барьер.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>df = spark.read.parquet("s3://bucket/events")
+
+df.groupBy("country").count().explain(True)
+
+# == Physical Plan ==
+# * HashAggregate ...            &lt;- partial (до shuffle)
+#   Exchange ...                 &lt;- граница стадии (shuffle)
+# * HashAggregate ...            &lt;- final (после shuffle)</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Запомните связку: <b>1 действие = 1 job</b>, <b>1 shuffle = +1 stage</b>, <b>1 партиция = 1 task</b>. На этих трёх правилах держится чтение Spark UI.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>DAG и SparkSession</h2>
+      <p>Граф вычислений и точка входа в приложение.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое DAG и зачем он нужен?</li>
+        <li>Почему Spark строит граф, а не выполняет строку за строкой?</li>
+        <li>Зачем нужен SparkSession?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое DAG?</div>
+        <div class="a"><b>Directed Acyclic Graph</b> — направленный ациклический граф: вершины это данные (RDD/DataFrame), рёбра — трансформации. Граф не содержит циклов, поэтому порядок вычисления детерминирован. По DAG драйвер строит физический план и разбивает его на стадии.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему граф, а не императивно?</div>
+        <div class="a">Граф позволяет оптимизировать весь пайплайн целиком: объединять операции, менять порядок, переиспользовать вычисленные партиции. Императивное выполнение такой свободы не даёт.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем SparkSession?</div>
+        <div class="a">Это единая точка входа с Spark 2.x: заменяет <code>SparkContext</code>, <code>SQLContext</code> и <code>HiveContext</code>. Через неё читают данные, выполняют SQL, настраивают конфигурации. <code>SparkContext</code> спрятан внутри и доступен как <code>spark.sparkContext</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import SparkSession
+
+spark = (
+    SparkSession.builder
+    .appName("dag-demo")
+    .config("spark.sql.shuffle.partitions", "200")
+    .getOrCreate()
+)
+
+# SQL и DataFrame API работают с одним движком
+spark.sql("SELECT 1 AS one").show()
+print(spark.sparkContext.appName)</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>DAG — это «черновик» вычислений, который оптимизатор доводит до физического плана. Если кандидат умеет показать план через <code>explain()</code> и объяснить границы стадий, тема закрыта.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Narrow и wide трансформации</h2>
+      <p>Когда данные едут по сети, а когда нет.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем narrow-трансформация отличается от wide?</li>
+        <li>Какие операции вызывают shuffle?</li>
+        <li>Почему широкие трансформации дороже?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Narrow vs wide?</div>
+        <div class="a"><b>Narrow</b> — каждая входная партиция нужна максимум одной выходной, данные не переезжают между узлами (<code>select</code>, <code>filter</code>, <code>withColumn</code>, <code>map</code>). <b>Wide</b> — выходная партиция зависит от многих входных, требуется shuffle (<code>groupBy</code>, <code>join</code>, <code>orderBy</code>, <code>distinct</code>, <code>repartition</code>).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему wide дороже?</div>
+        <div class="a">Данные пишутся на диск, передаются по сети, сортируются и объединяются. Это сетевая и дисковая нагрузка плюс сериализация. Каждый shuffle — потенциальные точки перекоса и spill.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему narrow-операции объединяются в одну стадию?</div>
+        <div class="a">Их можно применять к каждой партиции независимо, одной задачей. Spark выстраивает их в pipeline и не создаёт барьеров, пока не встретит wide-операцию.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># narrow: не тянет shuffle
+df.select("user_id").filter(F.col("user_id").isNotNull())
+
+# wide: тянет shuffle
+df.groupBy("country").agg(F.sum("revenue"))
+df.orderBy(F.desc("revenue"))
+df.join(other, "user_id")</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Недооценивают <code>orderBy</code> — это всегда дорогая wide-операция.</li>
+        <li>Ставят <code>repartition</code> «на всякий случай», добавляя лишний shuffle.</li>
+        <li>Путают <code>distinct</code> (shuffle) и <code>dropDuplicates</code> на маленьких объёмах, ожидая одинакового плана.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Ключевой вопрос самопроверки: «нужны ли данные конкретной партиции другим партициям?» Если да — это wide, и дальше начинается тема партиционирования и shuffle.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Архитектура Spark держится на нескольких опорах: <b>драйвер</b> планирует, <b>экзекьюторы</b> считают, <b>cluster manager</b> выдаёт ресурсы. Вычисления ленивы по определению — от трансформации до действия пайплайн остаётся лишь описанием.</p>
+      <p class="lead">Из ленивости вырастает вся иерархия исполнения: действие порождает job, DAG режется на stages по границам shuffle, а каждая стадия раскладывается на tasks по числу партиций. Понимание narrow/wide — это то, чем вы объясняете, почему одни операции дешёвые, а другие тянут данные по сети.</p>
+      <p class="lead">На интервью старайтесь не просто перечислять компоненты, а показывать причинно-следственные связи: ленивость даёт оптимизатору свободу, широкая трансформация создаёт барьер, барьер рождает стадию. Именно этот «рассказ по цепочке» отличает подготовленного кандидата.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

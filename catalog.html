@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="beige">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Каталог — Data Engineer: подготовка к интервью</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Каталог</div>
+    <h1>Data Engineer: подготовка к интервью</h1>
+    <p class="subtitle">Темы, вопросы и примеры кода по разделам</p>
+    <div class="meta-row">
+      <span class="pill">5 разделов</span>
+      <span class="pill">20 тем</span>
+      <span class="pill">SQL · Python · Spark · System Design</span>
+    </div>
+  </header>
+
+  <div class="note">
+    <b>Как пользоваться.</b> Идите по разделам сверху вниз или начните с темы, где чувствуете слабое место. В каждой теме — типичные вопросы с ответами, примеры кода и частые ошибки. Метки <span class="level j">Junior</span> <span class="level">Middle</span> <span class="level">Senior</span> показывают, на каком уровне это спрашивают.
+  </div>
+
+  <nav class="toc">
+    <h2>Разделы</h2>
+    <ul>
+      <li><a href="#s1">1. Как проходит интервью</a></li>
+      <li><a href="#s2">2. SQL</a></li>
+      <li><a href="#s3">3. Python</a></li>
+      <li><a href="#s4">4. Spark</a></li>
+      <li><a href="#s5">5. System Design</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1. ОБЗОР ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Как проходит интервью</h2>
+      <p>Этапы воронки, форматы секций и на что смотрят на каждом шаге.</p>
+    </div>
+    <div class="grid">
+      <article class="card">
+        <div class="top"><h3>Как проходит интервью DE</h3><span class="stars" title="Начать здесь">★★★</span></div>
+        <div class="tags"><span class="tag">Обзор</span><span class="tag">Все уровни</span></div>
+        <p class="idea">Собеседование DE — это проверка инженерного мышления о данных, а не только синтаксиса SQL.</p>
+        <p class="desc">Этапам воронки (скрининг, SQL, coding, system design, поведенческая секция), таймингу и стратегии ответов.</p>
+        <p class="why"><b>Когда пригодится:</b> перед первым собеседованием и при подготовке к конкретной компании.</p>
+        <a class="more" href="how-interview.html">Перейти к теме →</a>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ 2. SQL ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>SQL</h2>
+      <p>Ядро собеседования DE: запросы, оконные функции, оптимизация.</p>
+    </div>
+    <div class="grid">
+
+      <article class="card">
+        <div class="top"><h3>Оконные функции</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Оконные функции считают «в контексте строки» и не схлопывают результат, как GROUP BY.</p>
+        <p class="desc">OVER/PARTITION BY, ROW_NUMBER vs RANK vs DENSE_RANK, LEAD/LAG, нарастающие итоги и рамки.</p>
+        <p class="why"><b>Когда пригодится:</b> топ-1 на группу, дедупликация, сравнение с прошлой строкой, running totals.</p>
+        <a class="more" href="sql-window-functions.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>JOIN и агрегации</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Junior</span><span class="tag">Middle</span></div>
+        <p class="idea">Большинство ошибок в аналитике — от непонимания гранулярности и типов JOIN.</p>
+        <p class="desc">INNER/LEFT/CROSS/JOIN-размножение строк, HAVING vs WHERE, GROUP BY и NULL в агрегациях.</p>
+        <p class="why"><b>Когда пригодится:</b> при сборке любой витрины и в задачах «найди расхождение».</p>
+        <a class="more" href="sql-joins.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Оптимизация запросов</h3></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Сначала читаем план, потом меняем запрос — а не наоборот.</p>
+        <p class="desc">EXPLAIN, индексы и селективность, sargability, лишние сортировки, партиционирование и pushdown.</p>
+        <p class="why"><b>Когда пригодится:</b> когда запрос «работает, но долго» и на секции про производительность.</p>
+        <a class="more" href="sql-optimization.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>NULL и типы данных</h3></div>
+        <div class="tags"><span class="tag">Junior</span><span class="tag">Middle</span></div>
+        <p class="idea">NULL — это «неизвестно», а не пустая строка и не ноль.</p>
+        <p class="desc">Трёхзначной логике, NULL в сравнениях и агрегатах, COALESCE/NULLIF, приведению типов и датам.</p>
+        <p class="why"><b>Когда пригодится:</b> когда «условие вроде верное, а строки не находятся».</p>
+        <a class="more" href="sql-null-types.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Задачи с решениями</h3><span class="stars" title="Практика">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">SQL-секция — это разбор задач вслух, а не молчаливое написание кода.</p>
+        <p class="desc">Типовым задачам: top-N, дедупликация, воронка, retention, gaps and islands — с разбором решения.</p>
+        <p class="why"><b>Когда пригодится:</b> за день до интервью и для тренировки «говорю, пока пишу».</p>
+        <a class="more" href="sql-tasks.html">Перейти к теме →</a>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ 3. PYTHON ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Python</h2>
+      <p>Данные, алгоритмы и тонкие места языка, которые спрашивают у DE.</p>
+    </div>
+    <div class="grid">
+
+      <article class="card">
+        <div class="top"><h3>pandas: join и groupby</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Junior</span><span class="tag">Middle</span></div>
+        <p class="idea">merge/groupby — это про гранулярность и производительность, а не про «соединить два датафрейма».</p>
+        <p class="desc">merge и how, groupby-agg, transform vs apply, индексы, работа с датами и памятью.</p>
+        <p class="why"><b>Когда пригодится:</b> на coding-секции и в реальной трансформации данных.</p>
+        <a class="more" href="python-pandas.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Алгоритмы и структуры данных</h3></div>
+        <div class="tags"><span class="tag">Middle</span></div>
+        <p class="idea">Для DE важнее сложность и выбор структуры, чем заучивание решений.</p>
+        <p class="desc">Сложности O(n), хеш-таблицы, сортировки, два указателя, словари и множества в задачах на данные.</p>
+        <p class="why"><b>Когда пригодится:</b> на coding-секции и при разборе узких мест в пайплайнах.</p>
+        <a class="more" href="python-algorithms.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Итераторы и генераторы</h3></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Генераторы позволяют обрабатывать данные потоком, а не держать всё в памяти.</p>
+        <p class="desc">iter/next, yield, ленивые вычисления, контекстные менеджеры, чтение больших файлов по частям.</p>
+        <p class="why"><b>Когда пригодится:</b> когда файл «не влезает в память» — любимый вопрос на Middle+.</p>
+        <a class="more" href="python-iterators.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Типичные вопросы</h3></div>
+        <div class="tags"><span class="tag">Junior</span><span class="tag">Middle</span></div>
+        <p class="idea">Спрашивают не синтаксис, а понимание: mutable/immutable, копии, GIL, исключения.</p>
+        <p class="desc">Быстрым вопросам с ответами: типы и изменяемость, копирование, область видимости, виртуальные окружения.</p>
+        <p class="why"><b>Когда пригодится:</b> на скрининге и разогреве перед coding-секцией.</p>
+        <a class="more" href="python-questions.html">Перейти к теме →</a>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ 4. SPARK ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Spark</h2>
+      <p>Распределённая обработка: как работает и где ломается на масштабе.</p>
+    </div>
+    <div class="grid">
+
+      <article class="card">
+        <div class="top"><h3>Архитектура Spark</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Spark — это ленивые вычисления над распределёнными данными под управлением драйвера.</p>
+        <p class="desc">Драйверу, экзекуторам, job/stage/task, ленивым трансформациям и DAG.</p>
+        <p class="why"><b>Когда пригодится:</b> почти на любом собеседовании с Big Data.</p>
+        <a class="more" href="spark-architecture.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Партиционирование и shuffle</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Shuffle — самая дорогая операция; почти весь тюнинг сводится к её уменьшению.</p>
+        <p class="desc">Партициям, широким и узким трансформациям, repartition vs coalesce, числу партиций и spill.</p>
+        <p class="why"><b>Когда пригодится:</b> когда job «падает по памяти» или работает часами.</p>
+        <a class="more" href="spark-partitioning.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Тюнинг и перекос данных</h3></div>
+        <div class="tags"><span class="tag">Senior</span></div>
+        <p class="idea">Data skew убивает параллелизм: одна задача тащит весь объём.</p>
+        <p class="desc">Salting, broadcast join, AQE, управлению памятью, кэшированию и чтению планов Spark UI.</p>
+        <p class="why"><b>Когда пригодится:</b> на Senior-секции и в разборе реальных инцидентов.</p>
+        <a class="more" href="spark-tuning.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>DataFrame и RDD</h3></div>
+        <div class="tags"><span class="tag">Middle</span></div>
+        <p class="idea">DataFrame предпочтительнее: Catalyst и Tungsten оптимизируют план за вас.</p>
+        <p class="desc">Разнице API, схемам и типам, когда нужен RDD, UDF и их цене.</p>
+        <p class="why"><b>Когда пригодится:</b> во вводной части про Spark и в вопросах «что выбрать».</p>
+        <a class="more" href="spark-dataframe-rdd.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Join-стратегии</h3></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Тип join определяет, будет ли это быстро или превратится в дорогой shuffle.</p>
+        <p class="desc">Broadcast Hash, Sort-Merge и Shuffle Hash join, как Spark выбирает стратегию и как помочь ей.</p>
+        <p class="why"><b>Когда пригодится:</b> при оптимизации тяжёлых джойнов и на system design.</p>
+        <a class="more" href="spark-joins.html">Перейти к теме →</a>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ 5. SYSTEM DESIGN ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>System Design</h2>
+      <p>Проектирование пайплайнов и хранилищ: как думать вслух на интервью.</p>
+    </div>
+    <div class="grid">
+
+      <article class="card">
+        <div class="top"><h3>Проектирование ETL/ELT</h3><span class="stars" title="Обязательно">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Хороший пайплайн идемпотентен, наблюдаем и перезапускаем с любой точки.</p>
+        <p class="desc">Слоям raw/stage/mart, idempotency, backfill, оркестрации и контрактам на данные.</p>
+        <p class="why"><b>Когда пригодится:</b> в system design и в рассказе о своём опыте.</p>
+        <a class="more" href="sd-etl.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Batch и Streaming</h3></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Выбор «батч или стрим» — это компромисс латентности, стоимости и сложности.</p>
+        <p class="desc">Lambda vs Kappa, окнам и времени события, exactly-once и идемпотентности в стриме.</p>
+        <p class="why"><b>Когда пригодится:</b> в вопросах про реальное время и Kafka.</p>
+        <a class="more" href="sd-batch-streaming.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Хранилища и CAP</h3></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">Хранилище выбирают под паттерн доступа, а не по популярности.</p>
+        <p class="desc">OLTP vs OLAP, колоночным и строковым базам, CAP, DWH, data lake и lakehouse.</p>
+        <p class="why"><b>Когда пригодится:</b> когда спрашивают «где хранить и почему».</p>
+        <a class="more" href="sd-storage-cap.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Масштабирование и SLA</h3></div>
+        <div class="tags"><span class="tag">Senior</span></div>
+        <p class="idea">Масштаб — это про узкие места, стоимость и наблюдаемость, а не про «побольше машин».</p>
+        <p class="desc">Горизонтальному росту, SLA/SLO, мониторингу, обработке инцидентов и стоимости владения.</p>
+        <p class="why"><b>Когда пригодится:</b> на Senior-секции и в разговоре про прод.</p>
+        <a class="more" href="sd-scaling.html">Перейти к теме →</a>
+      </article>
+
+      <article class="card">
+        <div class="top"><h3>Пример: спроектировать пайплайн</h3><span class="stars" title="Практика">★★★</span></div>
+        <div class="tags"><span class="tag">Middle</span><span class="tag">Senior</span></div>
+        <p class="idea">System design проверяет структуру мышления, а не знание конкретного инструмента.</p>
+        <p class="desc">Полному примеру: от требования до схемы — источники, слои, оркестрация, качество, деплой.</p>
+        <p class="why"><b>Когда пригодится:</b> для тренировки сквозного ответа на доске.</p>
+        <a class="more" href="sd-example.html">Перейти к теме →</a>
+      </article>
+
+    </div>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="index.html">← Вернуться к навигации</a></p>
+  </footer>
+</div>
+</body>
+</html>

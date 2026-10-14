@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Итераторы и генераторы — Python · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Python</div>
+    <h1>Итераторы и генераторы</h1>
+    <p class="subtitle">yield, ленивые вычисления и потоки</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Генераторы — ключ к обработке данных, которые не помещаются в память. На интервью Middle/Senior спрашивают, как читать файл на гигабайты, как считать по потоку и почему ленивые вычисления меняют профиль потребления памяти, а не только скорость.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Протокол итерации</a></li>
+      <li><a href="#s2">2. Генераторы и yield</a></li>
+      <li><a href="#s3">3. Ленивое чтение файлов</a></li>
+      <li><a href="#s4">4. itertools и ленивые пайплайны</a></li>
+      <li><a href="#s5">5. Контекстные менеджеры</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Протокол итерации</h2>
+      <p>iter, next и StopIteration — как Python ходит по коллекции.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем итерируемый объект отличается от итератора?</li>
+        <li>Что делают iter() и next()?</li>
+        <li>Как заканчивается перебор и что такое StopIteration?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Iterable против iterator?</div>
+        <div class="a"><b>Итерируемый</b> — объект, по которому можно пройти (список, файл, генератор). <b>Итератор</b> — объект, который помнит текущую позицию и умеет выдавать следующее значение. Функция <code>iter()</code> достаёт из итерируемого его итератор.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что делают iter() и next()?</div>
+        <div class="a"><code>iter(obj)</code> возвращает итератор. <code>next(it)</code> выдаёт очередное значение и сдвигает позицию. Когда элементы кончились, итератор поднимает исключение <code>StopIteration</code> — именно его перехватывает цикл <code>for</code>, чтобы завершиться.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему итератор исчерпывается один раз?</div>
+        <div class="a">Итератор хранит состояние. Пройдя по нему до конца, вы вычерпали его: повторный <code>for</code> ничего не даст. Чтобы пройти заново, нужен новый итератор — вызвать <code>iter()</code> ещё раз.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>data = [10, 20, 30]
+it = iter(data)
+
+print(next(it))   # 10
+print(next(it))   # 20
+print(next(it))   # 30
+# next(it) снова поднимет StopIteration</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются пройти по одному итератору дважды и получают пустой второй проход.</li>
+        <li>Ловят <code>StopIteration</code> там, где достаточно <code>for</code> или <code>next(it, default)</code>.</li>
+        <li>Возвращают итератор там, где вызывающий код ожидает переиспользуемый список.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Точная формулировка для интервью: «итерируемое можно обойти, итератор — это курсор, который обходит и вычерпывается». Это база, из которой выводятся все дальнейшие вопросы про генераторы.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Генераторы и yield</h2>
+      <p>Как функция на yield становится ленивым источником значений.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что делает yield и чем он отличается от return?</li>
+        <li>Что такое генераторное выражение?</li>
+        <li>Когда генератор экономит память?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">yield против return?</div>
+        <div class="a"><code>return</code> завершает функцию и отдаёт одно значение. <code>yield</code> приостанавливает функцию, отдаёт значение наружу и запоминает место остановки: при следующем запросе функция продолжит с той же строки. Функция с <code>yield</code> возвращает генератор.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое генераторное выражение?</div>
+        <div class="a">Это компактная запись вида <code>(f(x) for x in data)</code>. Отличается от списочного включения скобками: список <b>сразу</b> строит все элементы в памяти, а генераторное выражение <b>выдаёт</b> их по одному при переборе.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда генератор экономит память?</div>
+        <div class="a">Когда результат не нужно хранить целиком: поток записей, разбор большого файла, конвейер преобразований. Вместо n элементов в памяти живёт один текущий элемент плюс состояние генератора.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>def read_amounts(rows):
+    for row in rows:
+        yield float(row["amount"])
+
+# лениво: ничего не считается, пока нет перебора
+gen = (x * 2 for x in range(5))
+print(next(gen))   # 0
+print(list(gen))   # [2, 4, 6, 8]</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Понимают <code>yield</code> как «вернуть и выйти» — теряют главное свойство возобновления.</li>
+        <li>Заворачивают генератор в <code>list()</code>, обнуляя всю экономию памяти.</li>
+        <li>Путают ленивое генераторное выражение со жадным списочным включением.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Фраза для интервью: «генератор — это отложенные вычисления». Именно так формулируется главное отличие: не скорость, а то, что значения появляются по требованию, а не все сразу.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Ленивое чтение файлов</h2>
+      <p>Построчный проход и разбор CSV порциями.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как прочитать файл, который больше оперативной памяти?</li>
+        <li>Почему файловый объект итерируем и как он расходует память?</li>
+        <li>Как обрабатывать CSV порциями?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как читать большой файл?</div>
+        <div class="a">Построчно: файловый объект уже итератор по строкам, поэтому <code>for line in f</code> держит в памяти одну строку, а не весь файл. Это кардинально отличается от <code>f.read()</code>, который тянет в память всё содержимое.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как читать CSV порциями?</div>
+        <div class="a">У <code>csv.reader</code> можно задать размер буфера, а генератор поверх него отдаёт строки батчами. Либо накапливать строки в небольшой список и отдавать его через <code>yield</code> каждый раз, когда набрался размер батча.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что будет с памятью при таком чтении?</div>
+        <div class="a">Потребление становится почти константным: O(1) на буфер и текущий батч, а не O(n) на весь файл. Это и есть причина, по которой DE-пайплайны строят на генераторах.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import csv
+
+def read_csv_in_batches(path, batch_size=1000):
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        batch = []
+        for row in reader:
+            batch.append(row)
+            if len(batch) &gt;= batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+for chunk in read_csv_in_batches("events.csv"):
+    process(chunk)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Вызывают <code>read()</code> или <code>readlines()</code> на гигабайтном файле — падение по памяти.</li>
+        <li>Забывают, что <code>open()</code> без <code>with</code> оставляет файл открытым.</li>
+        <li>Копят батч в глобальном списке и незаметно возвращаются к хранению всего файла.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Ответ на классический вопрос «как обработать файл на 100 ГБ» строится из двух слов: «построчно» и «батчами». Если кандидат сразу говорит <code>read()</code>, тема закрывается в его пользу.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>itertools и ленивые пайплайны</h2>
+      <p>islice, chain и соединение генераторов в конвейер.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что делают itertools.islice, chain, groupby, tee?</li>
+        <li>Как собрать конвейер из генераторов?</li>
+        <li>Чем itertools экономнее обычных функций списков?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что делают islice и chain?</div>
+        <div class="a"><code>islice(iterable, n)</code> берёт первые n элементов итерируемого, не создавая копию, а <code>islice(it, start, stop)</code> — срез. <code>chain(a, b)</code> склеивает несколько итерируемых в один поток, не сливая их в общий список.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем нужен tee?</div>
+        <div class="a"><code>tee(it, 2)</code> разветвляет один итератор на два независимых; каждый помнит свой прогресс. Удобно, когда поток нужно использовать дважды, но важно помнить: tee всё равно буферизует недочитанные элементы, поэтому память растёт при сильном разбеге между ветками.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Чем itertools экономнее?</div>
+        <div class="a">Все его функции ленивы: они не строят промежуточных списков, а передают элементы по цепочке «на лету». Конвейер из нескольких ленивых шагов держит в памяти примерно один элемент, а не результат каждого этапа.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import itertools as it
+
+def clean(rows):
+    for r in rows:
+        r = r.strip()
+        if r:
+            yield r
+
+def parse(lines):
+    for line in lines:
+        yield line.split(",")
+
+pipeline = parse(clean(open("data.csv", encoding="utf-8")))
+first = list(it.islice(pipeline, 5))   # первые 5 записей
+
+merged = it.chain([["header"]], pipeline)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Используют <code>itertools.groupby</code> на несортированных данных и получают разорванные группы.</li>
+        <li>Злоупотребляют <code>tee</code> и незаметно съедают память буфером ветки.</li>
+        <li>Складывают результаты всех шагов конвейера в список, лишая его ленивости.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Идея пайплайна: данные текут через цепочку ленивых шагов, и в памяти живёт только текущий элемент. Это ровно то, что происходит в настоящих ETL-потоках, и интервьюер ждёт именно такой картинки.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Контекстные менеджеры</h2>
+      <p>with, __enter__/__exit__ и гарантированное освобождение ресурсов.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что делает оператор with?</li>
+        <li>Как написать свой контекстный менеджер?</li>
+        <li>Как связаны генераторы и contextlib?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что делает with?</div>
+        <div class="a"><code>with open(...) as f</code> гарантирует, что ресурс будет закрыт даже при исключении. За кулисами вызывается <code>__enter__</code> при входе и <code>__exit__</code> при выходе, в том числе при ошибке.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как сделать свой менеджер?</div>
+        <div class="a">Через <code>contextlib.contextmanager</code> и генератор: код до <code>yield</code> — это вход (выделение ресурса), код после — выход (освобождение). Компактнее, чем описывать класс с <code>__enter__</code> и <code>__exit__</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Где это нужно в DE?</div>
+        <div class="a">Подключение к базе, открытие файла, соединение с брокером, блокировка. Везде, где ресурс нужно гарантированно вернуть, даже если обработка упала на середине.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from contextlib import contextmanager
+
+@contextmanager
+def timer(label):
+    start = time.time()
+    try:
+        yield
+    finally:
+        print(f"{label}: {time.time() - start:.3f}s")
+
+with timer("load"):
+    load_partition(date)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Открывают файлы без <code>with</code> и оставляют дескрипторы висеть.</li>
+        <li>Размещают освобождение ресурса после <code>yield</code> без <code>try/finally</code> — при исключении код очистки пропускается.</li>
+        <li>Полагаются на сборщик мусора вместо явного закрытия.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Контекстный менеджер — это ещё одно применение генератора: код до <code>yield</code> и после него естественно образует пару «вход/выход». Связав генераторы и with, вы закрываете сразу две темы одним ответом.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Итераторы и генераторы — это про то, как обрабатывать данные, не поднимая их целиком в память. Опора у ответа одна: ленивые вычисления дают константное потребление памяти вместо линейного.</p>
+      <p class="lead">Держите три опоры: протокол «iter/next/StopIteration», возобновляемость <code>yield</code> и ленивый конвейер на itertools. Про батчи и построчное чтение отвечайте как про рабочий рецепт, а не как про трюк.</p>
+      <p class="lead">На Senior-уровне отдельно проговорите компромиссы: генератор нельзя перечитать, <code>tee</code> копит буфер, а ленивость полезна, пока данные действительно не нужны все сразу. Именно эти нюансы и отличают выученный ответ от понимания.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

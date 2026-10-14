@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NULL и типы данных — SQL · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">SQL</div>
+    <h1>NULL и типы данных</h1>
+    <p class="subtitle">Трёхзначная логика, COALESCE и приведение типов</p>
+    <div class="meta-row">
+      <span class="level j">Junior</span><span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">NULL — самая недооценённая тема на собеседовании и самая частая причина тихо неверных ответов. Здесь ломаются фильтры, агрегаты, сравнения и соединения. Разберём трёхзначную логику, ловушку NOT IN, поведение NULL в агрегатах, функции COALESCE и NULLIF, деление на ноль, а также типы чисел, даты и таймзоны с неявными приведениями.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Природа NULL и трёхзначная логика</a></li>
+      <li><a href="#s2">2. Ловушка NOT IN</a></li>
+      <li><a href="#s3">3. Агрегаты, COALESCE, NULLIF</a></li>
+      <li><a href="#s4">4. Типы данных, даты и таймзоны</a></li>
+      <li><a href="#s5">5. Задачи с решениями</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Природа NULL и трёхзначная логика</h2>
+      <p>Почему = NULL не работает и что такое «неизвестно».</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое NULL — пустая строка, ноль или отсутствие значения?</li>
+        <li>Почему <code>col = NULL</code> не возвращает строки?</li>
+        <li>Что такое трёхзначная логика?</li>
+        <li>Чем <code>IS DISTINCT FROM</code> отличается от <code>&lt;&gt;</code>?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое NULL?</div>
+        <div class="a">NULL — это <b>отсутствие значения</b>, «неизвестно». Это не ноль, не пустая строка и не пробел. Ноль — конкретное число, пустая строка <code>''</code> — конкретная строка нулевой длины, а NULL означает «значение неизвестно или не задано».</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему col = NULL не работает?</div>
+        <div class="a">Потому что результат сравнения с NULL — это не TRUE и не FALSE, а <b>UNKNOWN</b>. В WHERE остаются только строки, для которых условие TRUE. Поэтому для проверки на отсутствие значения используют <code>IS NULL</code> / <code>IS NOT NULL</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое трёхзначная логика?</div>
+        <div class="a">Логика с тремя состояниями: TRUE, FALSE и UNKNOWN. Любая арифметика или сравнение с NULL даёт UNKNOWN. В <code>WHERE</code> UNKNOWN отбрасывается так же, как FALSE, — отсюда «пропавшие» строки.</div>
+      </div>
+      <div class="qa">
+        <div class="q">IS DISTINCT FROM — зачем?</div>
+        <div class="a">Обычное <code>&lt;&gt;</code> с NULL даёт UNKNOWN, и строки теряются. <code>IS DISTINCT FROM</code> считает NULL обычным сравнимым значением: <code>1 IS DISTINCT FROM NULL</code> → TRUE, <code>NULL IS DISTINCT FROM NULL</code> → FALSE. Незаменимо при сверке данных.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- не найдёт строк с NULL в phone
+SELECT * FROM users WHERE phone = NULL;      -- пусто
+
+-- правильно
+SELECT * FROM users WHERE phone IS NULL;
+
+-- безопасное сравнение «различаются ли», с учётом NULL
+SELECT * FROM a JOIN b USING (id)
+WHERE a.amount IS DISTINCT FROM b.amount;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Как только вы перестаёте думать о NULL как о «значении» и начинаете думать как о «неизвестно», половина странного поведения SQL становится объяснимой.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Ловушка NOT IN</h2>
+      <p>Почему NOT IN с NULL возвращает пустой результат.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Почему <code>NOT IN</code> с подзапросом может вернуть пусто?</li>
+        <li>Как обезопасить NOT IN?</li>
+        <li>Чем <code>NOT EXISTS</code> лучше <code>NOT IN</code>?</li>
+        <li>Как ведёт себя <code>IN</code> с NULL?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Почему NOT IN ломается о NULL?</div>
+        <div class="a">Условие <code>x NOT IN (1, 2, NULL)</code> раскрывается в <code>x &lt;&gt; 1 AND x &lt;&gt; 2 AND x &lt;&gt; NULL</code>. Последнее даёт UNKNOWN. А UNKNOWN <code>AND</code> TRUE равно UNKNOWN, и вся строка отбрасывается. Если в подзапросе есть хотя бы один NULL, результат будет <b>пустым</b>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как обезопасить NOT IN?</div>
+        <div class="a">Либо добавить <code>WHERE col IS NOT NULL</code> в подзапрос, либо, что надёжнее, заменить на <b><code>NOT EXISTS</code></b> — он корректно обрабатывает NULL и не зависит от пропусков.</div>
+      </div>
+      <div class="qa">
+        <div class="q">IN с NULL ведёт себя иначе?</div>
+        <div class="a"><code>IN</code> тоже даёт UNKNOWN при сравнении с NULL, но здесь это не так опасно: строка найдётся, если совпадёт хотя бы с одним непустым значением. Проблема появляется именно с <code>NOT IN</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- ПЛОХО: если в orders.client_id есть NULL, результат будет пуст
+SELECT * FROM clients
+WHERE client_id NOT IN (SELECT client_id FROM orders);
+
+-- ХОРОШО: NOT EXISTS корректно обрабатывает NULL
+SELECT * FROM clients c
+WHERE NOT EXISTS (
+  SELECT 1 FROM orders o WHERE o.client_id = c.client_id
+);
+
+-- либо явно исключить NULL в подзапросе
+SELECT * FROM clients
+WHERE client_id NOT IN (
+  SELECT client_id FROM orders WHERE client_id IS NOT NULL
+);</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Отлаживают пустой результат запроса, не подозревая, что в подзапросе есть NULL.</li>
+        <li>«Починивают» через <code>COALESCE</code> на стороне левой таблицы — это не решает проблему NULL в правой.</li>
+        <li>Считают, что <code>NOT IN</code> и <code>NOT EXISTS</code> всегда взаимозаменяемы.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Запомните как рефлекс: увидели <b>NOT IN</b> — ищите NULL. На интервью этот вопрос очень любят именно потому, что ответ короткий, а ошибка — тихая.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Агрегаты, COALESCE, NULLIF</h2>
+      <p>NULL в COUNT/SUM/AVG, подстановка значений и деление на ноль.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как NULL влияет на COUNT, SUM, AVG?</li>
+        <li>Что делает COALESCE и чем он отличается от NULLIF?</li>
+        <li>Как безопасно делить, избегая деления на ноль?</li>
+        <li>Что вернёт SUM на пустой выборке?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">NULL в COUNT/SUM/AVG?</div>
+        <div class="a"><code>COUNT(*)</code> считает все строки. <code>COUNT(col)</code> игнорирует NULL. <code>SUM</code> и <code>AVG</code> тоже <b>пропускают</b> NULL, причём AVG делит на количество непустых значений — среднее может оказаться неожиданно высоким.</div>
+      </div>
+      <div class="qa">
+        <div class="q">COALESCE vs NULLIF?</div>
+        <div class="a"><code>COALESCE(a, b, ...)</code> возвращает <b>первое непустое</b> значение — используется для подстановки. <code>NULLIF(a, b)</code> возвращает NULL, если <code>a = b</code>, иначе <code>a</code> — используется, чтобы превратить «нежелательное» значение (например ноль) в NULL.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как безопасно делить?</div>
+        <div class="a">Обернуть знаменатель в <code>NULLIF</code>: <code>a / NULLIF(b, 0)</code>. Если <code>b = 0</code>, знаменатель станет NULL, и результат тоже будет NULL — без ошибки деления на ноль. Дальше при необходимости подставить запасное значение через COALESCE.</div>
+      </div>
+      <div class="qa">
+        <div class="q">SUM на пустой выборке?</div>
+        <div class="a"><code>NULL</code>. Это сюрприз для многих: ожидают ноль. Оборачивайте в <code>COALESCE(SUM(x), 0)</code>. Исключение — <code>COUNT</code>, который на пустой выборке возвращает 0.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>SELECT
+  COUNT(*)                              AS rows_total,
+  COUNT(amount)                         AS amount_filled,
+  AVG(amount)                           AS avg_filled,
+  COALESCE(SUM(amount), 0)              AS total_safe,
+  COALESCE(amount, 0)                   AS amount_zero,
+  NULLIF(discount, 0)                   AS discount_or_null,
+  revenue / NULLIF(orders_cnt, 0)       AS avg_check
+FROM sales;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Делят без защиты и получают ошибку division by zero или «бесконечность».</li>
+        <li>Ожидают ноль от <code>SUM</code> и <code>AVG</code> на пустых данных.</li>
+        <li>Путают направления: ставят <code>NULLIF</code> там, где нужен <code>COALESCE</code>, и наоборот.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Два инструмента, которые стоит держать под рукой: <code>COALESCE</code> — «дай первое непустое», <code>NULLIF</code> — «преврати в NULL». В связке они закрывают и подстановку значений, и безопасное деление.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Типы данных, даты и таймзоны</h2>
+      <p>int, decimal, float, даты и опасность неявных приведений.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем DECIMAL отличается от FLOAT и почему для денег берут DECIMAL?</li>
+        <li>Чем TIMESTAMP отличается от TIMESTAMPTZ?</li>
+        <li>Чем опасны неявные приведения типов?</li>
+        <li>Как сравнивать даты корректно?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">DECIMAL vs FLOAT?</div>
+        <div class="a"><code>FLOAT</code> — число с плавающей точкой, хранит приближение, и на нём <code>0.1 + 0.2</code> может не дать ровно <code>0.3</code>. <code>DECIMAL(p, s)</code> — точное десятичное число с заданной точностью. Для денег и любых точных расчётов берут <b>DECIMAL/NUMERIC</b>, никогда не FLOAT.</div>
+      </div>
+      <div class="qa">
+        <div class="q">TIMESTAMP vs TIMESTAMPTZ?</div>
+        <div class="a"><code>TIMESTAMP</code> хранит дату и время <b>без часового пояса</b> — «настенное» время. <code>TIMESTAMPTZ</code> хранит момент времени и нормализует его к UTC. Для событий используйте TIMESTAMPTZ, иначе при смене таймзоны сервера данные «поедут».</div>
+      </div>
+      <div class="qa">
+        <div class="q">Чем опасны неявные приведения?</div>
+        <div class="a">База может молча привести тип и получить неожиданный результат или сломать индекс. Пример: сравнение строки с числом, где <code>'10' &lt; '9'</code> как строки, но <code>10 &gt; 9</code> как числа. Ещё хуже, когда приведение делается к <b>колонке</b> — это скрытая функция и потеря sargability.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как сравнивать даты?</div>
+        <div class="a">Не приводить дату к строке. Сравнивать в диапазоне: <code>created_at &gt;= '2024-01-01' AND created_at &lt; '2024-02-01'</code>. Так вы избегаете и проблем с форматом, и лишних функций над колонкой.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- ПЛОХО для денег: приближение
+SELECT 0.1::float8 + 0.2::float8;   -- 0.30000000000000004
+
+-- ХОРОШО: точные деньги
+SELECT 0.1::numeric + 0.2::numeric; -- 0.3
+
+-- ПЛОХО: неявное приведение, возможна потеря строк
+SELECT * FROM events WHERE event_date = '01.02.2024';
+
+-- ХОРОШО: диапазон по дате, без функций над колонкой
+SELECT * FROM events
+WHERE event_date &gt;= '2024-02-01' AND event_date &lt; '2024-03-01';</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Считают деньги в <code>FLOAT</code> и потом ловят копеечные расхождения в отчётах.</li>
+        <li>Хранят события в <code>TIMESTAMP</code> без пояса и путаются при агрегации по дням.</li>
+        <li>Сравнивают дату со строкой в «человеческом» формате, получая неполную выборку.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Тип данных — это часть логики, а не деталь. Деньги — DECIMAL, события — TIMESTAMPTZ со сравнением диапазоном. Тогда ни округление, ни таймзоны не испортят метрику задним числом.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Задачи с решениями</h2>
+      <p>Типовые вопросы, где NULL меняет ответ.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача 1. Заменить NULL на значение по умолчанию</div>
+      <pre class="code"><code>SELECT
+  client_id,
+  COALESCE(city, 'не указан') AS city
+FROM clients;
+
+-- несколько вариантов подстановки по приоритету
+SELECT COALESCE(mobile, work_phone, home_phone, 'нет телефона') AS phone
+FROM contacts;</code></pre>
+      <p class="lead">COALESCE берёт первое непустое значение слева направо — удобно для «запасных» источников.</p>
+
+      <div class="blocklabel">Задача 2. Среднее, устойчивое к пропускам и нулям</div>
+      <pre class="code"><code>SELECT
+  AVG(rating)                       AS avg_all_filled,
+  AVG(COALESCE(rating, 0))          AS avg_zero_filled
+FROM reviews;
+
+-- среднее только по строкам, где оценка реально есть
+SELECT AVG(rating) AS avg_rated
+FROM reviews
+WHERE rating IS NOT NULL;</code></pre>
+
+      <div class="blocklabel">Задача 3. Безопасное деление (конверсия)</div>
+      <pre class="code"><code>SELECT
+  visits,
+  orders,
+  orders / NULLIF(visits, 0) AS conversion
+FROM funnel;</code></pre>
+      <p class="lead">Без <code>NULLIF</code> строка с нулевыми визитами уронила бы запрос делением на ноль.</p>
+
+      <div class="blocklabel">Задача 4. Найти записи, которых нет, без ловушки NOT IN</div>
+      <pre class="code"><code>SELECT c.client_id
+FROM clients c
+WHERE NOT EXISTS (
+  SELECT 1 FROM orders o WHERE o.client_id = c.client_id
+);</code></pre>
+      <p class="lead">Если в <code>orders.client_id</code> есть NULL, вариант с <code>NOT IN</code> вернул бы пусто.</p>
+
+      <div class="blocklabel">Задача 5. Сверка двух таблиц с учётом NULL</div>
+      <pre class="code"><code>SELECT a.id, a.amount AS src, b.amount AS tgt
+FROM source a
+FULL OUTER JOIN target b USING (id)
+WHERE a.amount IS DISTINCT FROM b.amount;</code></pre>
+      <p class="lead"><code>IS DISTINCT FROM</code> считает NULL полноценным значением — строки с расхождением не теряются.</p>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>В каждой из этих задач правильное решение отличается от «наивного» ровно обработкой NULL. Проговаривайте на интервью, почему выбран COALESCE, NULLIF или NOT EXISTS — это и есть проверка понимания темы.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">NULL и типы данных — это тихая тема: ошибки здесь не роняют запрос, а незаметно меняют ответ. Именно поэтому её так любят на собеседованиях. Три опоры, которые стоит довести до автоматизма: NULL — это UNKNOWN, а не значение; сравнение с NULL требует <code>IS NULL</code> и <code>IS DISTINCT FROM</code>; агрегаты игнорируют NULL и могут дать неожиданный результат.</p>
+      <p class="lead">Два инструмента закрывают большинство практических кейсов: <code>COALESCE</code> для подстановки и <code>NULLIF</code> для безопасного деления и превращения «плохих» значений в NULL. А привычка писать <code>NOT EXISTS</code> вместо <code>NOT IN</code> снимает целый класс ошибок с пропавшими строками.</p>
+      <p class="lead">И не забывайте про типы: деньги — DECIMAL, события — TIMESTAMPTZ, даты сравниваем диапазоном. Большая часть «загадочных» расхождений в отчётах — это либо NULL, либо неявное приведение типа.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

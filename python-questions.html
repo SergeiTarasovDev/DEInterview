@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Типичные вопросы — Python · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Python</div>
+    <h1>Типичные вопросы</h1>
+    <p class="subtitle">Быстрые вопросы с ответами</p>
+    <div class="meta-row">
+      <span class="level j">Junior</span><span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">Это разминка перед технической секцией: короткие вопросы про язык, которые задают почти всегда. Здесь важна не глубина, а точность формулировки за десять секунд. Ниже — формат «вопрос-ответ» по темам, которые всплывают чаще всего.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Типы и изменяемость</a></li>
+      <li><a href="#s2">2. Функции и область видимости</a></li>
+      <li><a href="#s3">3. Сравнения и коллекции</a></li>
+      <li><a href="#s4">4. Исключения и окружение</a></li>
+      <li><a href="#s5">5. Даты и практика</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Типы и изменяемость</h2>
+      <p>mutable/immutable, копирование и разница коллекций.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что значит изменяемый и неизменяемый тип?</li>
+        <li>Чем отличается поверхностное копирование от глубокого?</li>
+        <li>list, tuple или set — что выбрать?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">mutable и immutable — в чём разница?</div>
+        <div class="a">Изменяемые объекты (<code>list</code>, <code>dict</code>, <code>set</code>) можно менять на месте — добавление и удаление не создаёт новый объект. Неизменяемые (<code>int</code>, <code>str</code>, <code>tuple</code>, <code>frozenset</code>) при «изменении» возвращают новый объект. Только неизменяемые могут быть ключами <code>dict</code> и элементами <code>set</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">copy и deepcopy?</div>
+        <div class="a"><code>copy.copy</code> делает поверхностную копию: новый контейнер, но вложенные объекты остаются общими. <code>copy.deepcopy</code> рекурсивно копирует всё дерево — правки во вложенных структурах не затрагивают оригинал.</div>
+      </div>
+      <div class="qa">
+        <div class="q">list, tuple, set — в чём разница?</div>
+        <div class="a"><code>list</code> — изменяемый упорядоченный, допускает дубли. <code>tuple</code> — неизменяемый упорядоченный (можно использовать как ключ). <code>set</code> — неупорядоченное множество уникальных значений с быстрой проверкой вхождения.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import copy
+
+a = [1, [2, 3]]
+b = a.copy()          # shallow: вложенный список общий
+c = copy.deepcopy(a)  # глубокая копия
+
+b[1].append(99)       # изменит и a, и b
+c[1].append(99)       # изменит только c</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Считают, что <code>=</code> копирует объект — на деле это вторая ссылка на тот же объект.</li>
+        <li>Берут поверхностную копию и удивляются, что вложенные данные изменились вместе с оригиналом.</li>
+        <li>Используют изменяемый объект как значение по умолчанию в функции.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Ключевая мысль: <code>=</code> не копирует, <code>copy</code> копирует неглубоко, <code>deepcopy</code> копирует полностью. Этого достаточно для девяти из десяти вопросов на эту тему.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Функции и область видимости</h2>
+      <p>*args/**kwargs, локальные и глобальные имена.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что делают *args и **kwargs?</li>
+        <li>Как работает область видимости и инструкция global?</li>
+        <li>Что не так с изменяемым значением по умолчанию?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">*args и **kwargs — зачем?</div>
+        <div class="a"><code>*args</code> собирает лишние позиционные аргументы в кортеж, <code>**kwargs</code> — именованные в словарь. Обратная операция — <code>*</code> и <code>**</code> при вызове распаковывают коллекцию в аргументы.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как работает область видимости?</div>
+        <div class="a">Python ищет имя по правилу LEGB: локальная, объемлющая, глобальная, встроенная область. Присваивание внутри функции создаёт локальную переменную, если явно не объявить <code>global</code> (или <code>nonlocal</code> для вложенной функции).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему изменяемое значение по умолчанию — ловушка?</div>
+        <div class="a">Значение по умолчанию вычисляется <b>один раз</b> при определении функции и живёт между вызовами. Если это список, он накапливает данные от всех вызовов. Обход — использовать <code>None</code> и создавать объект внутри.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>def collect(item, acc=None):
+    if acc is None:
+        acc = []
+    acc.append(item)
+    return acc
+
+# так делать нельзя: список общий для всех вызовов
+def bad(item, acc=[]):
+    acc.append(item)
+    return acc</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются изменить глобальную переменную без <code>global</code> и получают <code>UnboundLocalError</code>.</li>
+        <li>Используют список как аргумент по умолчанию и получают «протечку» данных между вызовами.</li>
+        <li>Путают <code>*args</code> в определении функции и <code>*</code> при вызове.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Про <code>*args/**kwargs</code> отвечайте одной фразой: «собирают лишние аргументы, а при вызове распаковывают». Про умолчания — всегда добавляйте предупреждение про изменяемые объекты: это любимый вопрос интервьюеров.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Сравнения и коллекции</h2>
+      <p>== и is, comprehensions и порядок словаря.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем == отличается от is?</li>
+        <li>Что такое списочные включения и когда их использовать?</li>
+        <li>Сохраняет ли словарь порядок?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">== против is?</div>
+        <div class="a"><code>==</code> сравнивает <b>значения</b>, <code>is</code> — <b>идентичность объектов</b> (один и тот же объект в памяти). Для чисел и строк малые значения могут кэшироваться, поэтому <code>is</code> иногда «случайно» работает, но полагаться на это нельзя. Для сравнения с <code>None</code> используют именно <code>is</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое comprehensions?</div>
+        <div class="a">Компактный синтаксис построения коллекции с фильтром и преобразованием: <code>[x*2 for x in data if x &gt; 0]</code>. Работает для списков, словарей и множеств. Читается лучше цикла и обычно быстрее, но не стоит вкладывать слишком много логики в одно выражение.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Сохраняет ли dict порядок?</div>
+        <div class="a">Да, начиная с Python 3.7 порядок вставки гарантирован официально. Но это не сортировка: чтобы упорядочить по ключу или значению, словарь сортируют явно через <code>sorted(d.items())</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>a = [1, 2, 3]
+b = [1, 2, 3]
+
+print(a == b)     # True — одинаковые значения
+print(a is b)     # False — разные объекты
+
+squares = {x: x ** 2 for x in range(5)}
+ordered = dict(sorted(squares.items()))</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Сравнивают значения через <code>is</code> и получают неверный результат на больших числах и строках.</li>
+        <li>Проверяют <code>x == None</code> вместо <code>x is None</code>.</li>
+        <li>Пишут comprehension с побочными эффектами внутри — теряют читаемость.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Одна строка для интервью: «<code>==</code> про значение, <code>is</code> про тот же объект». И не забывайте: порядок dict — гарантия языка с 3.7, но не сортировка.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Исключения и окружение</h2>
+      <p>try/except, GIL и виртуальные окружения.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как правильно обрабатывать исключения?</li>
+        <li>Что такое GIL и как он влияет на многопоточность?</li>
+        <li>Зачем нужны virtualenv и venv?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как обрабатывать исключения?</div>
+        <div class="a">Через <code>try/except</code> с конкретным типом исключения, а не «голым» <code>except</code>. Блок <code>finally</code> выполняется всегда — там освобождают ресурсы. Ловить всё подряд (<code>except Exception</code>) скрывает баги: лучше перечислить ожидаемые типы.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое GIL?</div>
+        <div class="a">Global Interpreter Lock — блокировка, из-за которой в CPython одновременно исполняется только один поток байт-кода. Поэтому потоки не ускоряют CPU-задачи; зато они полезны для I/O (сеть, диск, БД). Для параллельных вычислений используют процессы или библиотеки, отпускающие GIL.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем virtualenv и venv?</div>
+        <div class="a">Изолируют зависимости проекта: свой набор пакетов и версий, чтобы проекты не конфликтовали. <code>venv</code> — стандартный модуль Python, <code>virtualenv</code> — более старый сторонний инструмент с расширенными возможностями.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>try:
+    value = int(raw)
+except ValueError:
+    value = 0
+except (TypeError, KeyError) as e:
+    log.error("bad input: %s", e)
+finally:
+    close_connection()</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пишут <code>except:</code> без типа и глушат все ошибки, включая опечатки в коде.</li>
+        <li>Ждут ускорения CPU-задач от потоков и упираются в GIL.</li>
+        <li>Ставят пакеты глобально, а потом не могут воспроизвести окружение.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Про GIL отвечайте через различие нагрузок: «для I/O — потоки, для CPU — процессы». Это показывает, что вы понимаете не только определение, но и когда какой подход применять.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Даты и практика</h2>
+      <p>datetime, часовые пояса и типичные вопросы о коде.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как работать с датами в Python?</li>
+        <li>Почему важны часовые пояса?</li>
+        <li>Как сравнить две даты или найти разницу?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как работать с датами?</div>
+        <div class="a">Стандартный модуль <code>datetime</code>: классы <code>date</code>, <code>datetime</code>, <code>timedelta</code>. Строки парсят через <code>datetime.strptime</code> или <code>dateutil.parser</code>, а обратно форматируют <code>strftime</code>. Вычитание двух <code>datetime</code> даёт <code>timedelta</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему важны часовые пояса?</div>
+        <div class="a">Наивные (naive) даты без зоны дают неверные сравнения между регионами. Для корректности используют aware-даты с <code>tzinfo</code> (модуль <code>zoneinfo</code>), хранят время в UTC, а в локальную зону переводят только при выводе.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как найти разницу дат?</div>
+        <div class="a">Вычесть одну дату из другой — получите <code>timedelta</code> с днями, секундами и микросекундами. Для календарных месяцев/лет нужны дополнительные библиотеки, так как длина месяца переменная.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from datetime import datetime, timedelta, timezone
+
+now = datetime.now(timezone.utc)
+start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+delta = now - start
+print(delta.days)
+
+text = start.strftime("%Y-%m-%dT%H:%M:%S")</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Сравнивают naive-дату с aware-датой — получают <code>TypeError</code>.</li>
+        <li>Хранят локальное время без зоны и теряют один-два часа при переходе на летнее время.</li>
+        <li>Считают, что в месяце всегда 30 дней, при вычислении интервалов.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Правило, которое стоит назвать на интервью: «храним и сравниваем в UTC, в локальную зону переводим при отображении». Оно снимает почти все вопросы про даты и часовые пояса.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Эти вопросы короткие, но именно на них видно, насколько уверенно кандидат владеет языком. Правило разминки: отвечайте быстро, точно и одним-двумя предложениями, без ухода в детали, о которых не спросили.</p>
+      <p class="lead">Запомните пять опор, которые закрывают большинство вопросов: изменяемость и копирование, <code>*args/**kwargs</code>, <code>==</code> против <code>is</code>, GIL при обсуждении многопоточности и правило «UTC для хранения». Их достаточно, чтобы пройти разминку.</p>
+      <p class="lead">И держите заготовленные предупреждения: про изменяемые значения по умолчанию, про «голый» <code>except</code> и про naive-даты. Именно эти ловушки интервьюеры проверяют чаще всего.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

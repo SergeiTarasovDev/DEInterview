@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Оптимизация запросов — SQL · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">SQL</div>
+    <h1>Оптимизация запросов</h1>
+    <p class="subtitle">План выполнения, индексы и sargability</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Оптимизация — тема, которая отличает уверенного DE от человека, умеющего писать «просто рабочий» SQL. На Senior-уровне почти всегда просят прочитать план выполнения, объяснить, почему база выбрала seq scan, и переписать запрос так, чтобы индекс заработал. Разберём EXPLAIN, индексы, sargability и партиционирование.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. План выполнения: EXPLAIN</a></li>
+      <li><a href="#s2">2. Seq scan, index scan и селективность</a></li>
+      <li><a href="#s3">3. Sargability</a></li>
+      <li><a href="#s4">4. Сортировки, JOIN, подзапросы</a></li>
+      <li><a href="#s5">5. Партиционирование, pushdown, кэш</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>План выполнения: EXPLAIN</h2>
+      <p>Как читать дерево операций и где искать узкое место.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем EXPLAIN отличается от EXPLAIN ANALYZE?</li>
+        <li>Как читать план выполнения — сверху вниз или снизу вверх?</li>
+        <li>На что смотреть в первую очередь: cost, rows, actual time?</li>
+        <li>Почему оценка rows сильно расходится с фактической?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">EXPLAIN vs EXPLAIN ANALYZE?</div>
+        <div class="a"><code>EXPLAIN</code> показывает <b>план без выполнения</b> — только прогноз оптимизатора (оценки стоимости и строк). <code>EXPLAIN ANALYZE</code> <b>реально выполняет</b> запрос и добавляет фактические метрики: actual time, actual rows, loops. Второй вариант показывает правду, но может быть дорогим и в проде его запускают осторожно.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как читать план?</div>
+        <div class="a">План — это дерево: <b>вложенные узлы выполняются раньше внешних</b>. Читают обычно снизу вверх или по уровню отступов: сначала сканы таблиц, затем соединения, сортировки, агрегации. Узкое место — узел с наибольшим временем или с большой разницей оценка/факт по строкам.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему оценка rows расходится с фактом?</div>
+        <div class="a">Оптимизатор работает по <b>статистике</b>. Если таблица давно не анализировалась, статистика устарела, а по колонке с коррелированными значениями (например город и регион) оценки независимы и сильно занижены. Отсюда — неверный выбор метода соединения. Лечение: <code>ANALYZE</code> таблицы и корректная формулировка запроса.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>EXPLAIN ANALYZE
+SELECT o.order_id, c.name
+FROM orders o
+JOIN clients c ON c.client_id = o.client_id
+WHERE o.created_at &gt;= '2024-01-01'
+ORDER BY o.created_at DESC
+LIMIT 100;
+
+-- в выводе смотрим:
+-- Seq Scan / Index Scan на orders
+-- Hash Join vs Nested Loop
+-- Sort  -> лишняя сортировка больших объёмов?
+-- rows=оценка  vs  actual rows=факт</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Смотрят только на итоговое время и не ищут узел, который его съел.</li>
+        <li>Оценивают план по <code>cost</code>, хотя это условные единицы, а не миллисекунды.</li>
+        <li>Запускают <code>ANALYZE</code> на проде в час пик — реальное выполнение тяжёлого запроса.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Первое, что стоит говорить на интервью: «возьму EXPLAIN ANALYZE и посмотрю, где расходится оценка с фактом». Это сразу показывает, что вы оптимизируете по данным, а не по чутью.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Seq scan, index scan и селективность</h2>
+      <p>Когда индекс помогает, а когда база справедливо его игнорирует.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Почему база не использует индекс, хотя он есть?</li>
+        <li>Что такое селективность и при каком значении индекс выгоден?</li>
+        <li>Чем составной индекс отличается от нескольких одиночных?</li>
+        <li>Что такое покрывающий индекс?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Почему запрос идёт через seq scan при наличии индекса?</div>
+        <div class="a">Потому что оптимизатор решил, что так дешевле. Если условие возвращает <b>большую долю таблицы</b> (грубо — больше нескольких процентов), случайное чтение по индексу дороже последовательного скана. Индекс выгоден на <b>высокоселективных</b> условиях: когда отбирается мало строк.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое селективность?</div>
+        <div class="a">Доля строк, которую возвращает условие. <code>WHERE id = 5</code> высокоселективно (одна строка). <code>WHERE status = 'active'</code>, где 80% строк активны, низкоселективно — индекс на такой колонке почти бесполезен, а нередко вреден.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Составной индекс vs несколько одиночных?</div>
+        <div class="a">Составной индекс <code>(a, b, c)</code> работает <b>слева направо</b>: эффективен для условий по <code>a</code>, по <code>a и b</code>, по <code>a и b и c</code>. Отдельный запрос только по <code>b</code> его не использует. Порядок колонок критичен: первым ставят наиболее селективный и часто используемый предикат.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое покрывающий индекс?</div>
+        <div class="a">Индекс, который содержит <b>все колонки запроса</b> (в ключе или в INCLUDE). Тогда база отдаёт результат прямо из индекса, не обращаясь к таблице — это index-only scan, самая быстрая стратегия чтения.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- запрос, для которого нужен составной индекс
+SELECT order_id, amount
+FROM orders
+WHERE client_id = 42
+  AND status = 'paid'
+ORDER BY created_at DESC;
+
+-- покрывающий индекс под него
+CREATE INDEX idx_orders_cov
+  ON orders (client_id, status, created_at DESC)
+  INCLUDE (amount);
+
+-- проверить селективность колонки
+SELECT status, COUNT(*) * 100.0 / SUM(COUNT(*)) OVER () AS pct
+FROM orders
+GROUP BY status;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Ставят индекс на низкоселективную колонку (пол, статус из двух значений) — он не используется.</li>
+        <li>Создают несколько одиночных индексов вместо одного составного под конкретный запрос.</li>
+        <li>Забывают про направление сортировки в индексе — <code>DESC</code> в запросе требует <code>DESC</code> в индексе.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Индекс — это не «ускоритель всего», а инструмент под высокоселективный доступ. Перед созданием спросите: «какую долю строк я отбираю и по каким колонкам фильтрую и сортирую».</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Sargability</h2>
+      <p>Почему функция над колонкой в условии убивает индекс.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое sargability и что делает условие «неиндексируемым»?</li>
+        <li>Почему WHERE YEAR(date) = 2024 не использует индекс?</li>
+        <li>Как переписать условие, чтобы индекс заработал?</li>
+        <li>Что общего у функций над колонкой и неявного приведения типов?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое sargability?</div>
+        <div class="a">Способность условия быть вычисленным <b>по индексу</b> (Search ARGument able). Условие sargable, когда к колонке применяется прямое сравнение: <code>col = value</code>, <code>col &gt; value</code>, <code>col BETWEEN a AND b</code>. Как только вы оборачиваете колонку в функцию или выражение, индекс обычно перестаёт применяться.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему WHERE YEAR(date) = 2024 не берёт индекс?</div>
+        <div class="a">Потому что <code>YEAR(date)</code> вычисляется <b>для каждой строки</b> — база не может сопоставить значение функции с диапазоном в индексе и вынуждена делать полный скан. Диапазонное условие <code>date &gt;= '2024-01-01' AND date &lt; '2025-01-01'</code> sargable и использует индекс.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как переписать неиндексируемое условие?</div>
+        <div class="a">Перенести вычисление со столбца на константу: вместо <code>UPPER(email) = 'A@B.RU'</code> сравнивать с нормализованным значением или использовать функциональный индекс. Вместо <code>col + 1 &gt; 10</code> писать <code>col &gt; 9</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">При чём тут неявные приведения типов?</div>
+        <div class="a">Несовпадение типов — та же ловушка. Если колонка <code>text</code>, а сравниваете с числом, база может привести колонку (а не константу) — и это скрытая функция над колонкой. Условие теряет sargability, и индекс не срабатывает.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- ПЛОХО: функция над колонкой, индекс не работает
+SELECT * FROM orders
+WHERE YEAR(created_at) = 2024;
+
+-- ХОРОШО: sargable-диапазон, индекс используется
+SELECT * FROM orders
+WHERE created_at &gt;= '2024-01-01'
+  AND created_at &lt;  '2025-01-01';
+
+-- ПЛОХО: выражение над колонкой
+SELECT * FROM payments WHERE amount + 0 &gt; 1000;
+-- ХОРОШО
+SELECT * FROM payments WHERE amount &gt; 1000;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Оборачивают дату в <code>YEAR()</code>, <code>MONTH()</code>, <code>DATE_TRUNC()</code> и ждут использования индекса.</li>
+        <li>Строят условия на строке через <code>LOWER()</code>, <code>TRIM()</code> — нужен функциональный индекс или нормализация данных.</li>
+        <li>Смешивают типы (<code>id_text = 123</code>) и не замечают скрытого приведения.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Правило в одну строку: <b>«сравнивай колонку с константой, а не функцию от колонки»</b>. Половина «индекс не работает» — это ровно про нарушение sargability.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Сортировки, JOIN, подзапросы</h2>
+      <p>Где прячутся лишние проходы по данным.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем опасны лишние DISTINCT и ORDER BY?</li>
+        <li>JOIN или подзапрос — что быстрее?</li>
+        <li>Чем EXISTS отличается от IN по производительности?</li>
+        <li>Когда коррелированный подзапрос убивает производительность?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Почему DISTINCT и ORDER BY дороги?</div>
+        <div class="a"><code>DISTINCT</code> часто требует сортировки или хеширования всей выборки, а <code>ORDER BY</code> по колонке без индекса — полноценной сортировки в памяти/на диске. <code>DISTINCT</code> нередко ставят «на всякий случай» от размножения строк — правильнее устранить причину. <code>ORDER BY</code> без <code>LIMIT</code> и на финальном шаге сортирует весь результат зря.</div>
+      </div>
+      <div class="qa">
+        <div class="q">JOIN или подзапрос?</div>
+        <div class="a">Обычно оптимизатор приводит correlated-подзапросы к соединениям, но не всегда. <b>JOIN</b> даёт оптимизатору больше свободы (выбор порядка и метода соединения) и лучше масштабируется. Подзапрос в <code>SELECT</code> часто превращается в отдельный проход на каждую строку — классическая ловушка.</div>
+      </div>
+      <div class="qa">
+        <div class="q">EXISTS vs IN?</div>
+        <div class="a"><code>EXISTS</code> останавливается на <b>первом совпадении</b> и не материализует список — хорош для больших таблиц справа. <code>IN</code> с подзапросом может материализовать результат целиком и, вдобавок, опасен NULL. Для проверки существования предпочтителен <code>EXISTS</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- ПЛОХО: скалярный подзапрос выполняется на каждую строку
+SELECT c.client_id,
+       (SELECT COUNT(*) FROM orders o
+        WHERE o.client_id = c.client_id) AS cnt
+FROM clients c;
+
+-- ХОРОШО: один JOIN и агрегация
+SELECT c.client_id, COUNT(o.order_id) AS cnt
+FROM clients c
+LEFT JOIN orders o ON o.client_id = c.client_id
+GROUP BY c.client_id;
+
+-- существует ли хотя бы один оплаченный заказ
+SELECT client_id FROM clients c
+WHERE EXISTS (
+  SELECT 1 FROM orders o
+  WHERE o.client_id = c.client_id AND o.status = 'paid'
+);</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Ставят <code>DISTINCT</code> вместо устранения размножения строк после JOIN.</li>
+        <li>Пишут коррелированные подзапросы в <code>SELECT</code> — скрытые N+1 проход на каждую строку.</li>
+        <li>Используют <code>NOT IN</code> с подзапросом, где возможен NULL.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Если видите <code>DISTINCT</code> — спросите, откуда дубли. Если видите подзапрос в <code>SELECT</code> — почти всегда его можно заменить на JOIN с агрегацией.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Партиционирование, pushdown, кэш</h2>
+      <p>Как читать меньше данных ещё до выполнения.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое партиционирование и чем оно помогает запросу?</li>
+        <li>Что такое predicate pushdown и partition pruning?</li>
+        <li>Как работает кэш и почему запрос во второй раз быстрее?</li>
+        <li>Почему важно фильтровать по партиционной колонке?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что даёт партиционирование?</div>
+        <div class="a">Таблица физически разбита на части по ключу (обычно дата). Если запрос фильтрует по этой колонке, база читает <b>только нужные партиции</b> и пропускает остальные. Это не ускоряет сам скан внутри партиции, но резко сокращает объём прочитанных данных.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое predicate pushdown?</div>
+        <div class="a">Оптимизация, при которой фильтр «проталкивается» <b>как можно ближе к источнику</b> — к сканированию файлов/партиций. В колоночных хранилищах (Parquet, ORC) это позволяет читать только нужные колонки и блоки, отбрасывая лишние до материализации. Родственное понятие — partition pruning: отсечение целых партиций по предикату.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему второй запуск быстрее?</div>
+        <div class="a">Сработал <b>кэш</b>: страницы данных в buffer cache СУБД, план в plan cache, либо результат в кэше приложения. Важно на интервью различать: медленно «холодный» запуск — норма; если просмотренный план отличается между запусками, это влияет на замеры. Тесты скорости делают на прогретом и на холодном кэше осознанно.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- таблица партиционирована по дате
+-- ХОРОШО: фильтр по ключу партиционирования -> partition pruning
+SELECT COUNT(*) FROM events
+WHERE event_date BETWEEN '2024-06-01' AND '2024-06-30';
+
+-- ПЛОХО: фильтр по функции от колонки -> читаются все партиции
+SELECT COUNT(*) FROM events
+WHERE DATE_TRUNC('month', event_date) = '2024-06-01';</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Партиционируют по колонке, по которой почти не фильтруют, — выигрыша нет.</li>
+        <li>Ломают pruning функцией или приведением типа над партиционной колонкой.</li>
+        <li>Делают выводы о скорости по одному «прогретому» запуску, без учёта кэша.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Самый дешёвый способ ускорить запрос — <b>читать меньше данных</b>. Партиционирование и pushdown дают это без единого индекса, поэтому фильтр по колонке партиционирования — первое, на что смотрят в продакшене.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Оптимизация — это дисциплина, а не набор трюков. Универсальный алгоритм: прочитать план через <code>EXPLAIN ANALYZE</code>, найти узел с максимальным временем или наибольшим расхождением оценки и факта, понять, почему оптимизатор принял такое решение, и переписать запрос или добавить индекс под реальный паттерн доступа.</p>
+      <p class="lead">Три вещи, которые проверяют почти всегда: <b>sargability</b> (нет ли функции над колонкой в условии), <b>селективность</b> (нет ли индекса на низкоселективной колонке) и <b>гранулярность</b> (нет ли лишних сортировок, DISTINCT и коррелированных подзапросов). Партиционирование и pushdown — бонус на Senior: они сокращают объём чтения ещё до выполнения.</p>
+      <p class="lead">И держите в голове, что «быстро» без контекста не существует: сравнивайте на прогретом и холодном кэше, проговаривайте объёмы данных и допущения. Интервьюеру важно услышать, как вы измеряете и как рассуждаете, а не готовый рецепт.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Тюнинг и перекос данных — Spark · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Spark</div>
+    <h1>Тюнинг и перекос данных</h1>
+    <p class="subtitle">Salting, broadcast, AQE и память</p>
+    <div class="meta-row">
+      <span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Тюнинг Spark — тема для уровня Senior: здесь важно не пересказать параметры, а показать, как вы диагностируете проблему и какими инструментами её лечите. Почти всегда отправная точка — перекос данных, а инструменты — salting, broadcast, AQE и грамотное управление памятью.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Перекос данных</a></li>
+      <li><a href="#s2">2. Salting и broadcast</a></li>
+      <li><a href="#s3">3. Adaptive Query Execution</a></li>
+      <li><a href="#s4">4. Память и cache</a></li>
+      <li><a href="#s5">5. Spark UI, GC и spill</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Перекос данных</h2>
+      <p>Как распознать skew и почему он убивает производительность.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое перекос и откуда он берётся?</li>
+        <li>Как убедиться, что проблема именно в перекосе?</li>
+        <li>Чем перекос отличается от простой нехватки ресурсов?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Откуда берётся перекос?</div>
+        <div class="a">Из неравномерного распределения ключей: например, 90% событий приходят от одного клиента, или в join один ключ <code>NULL</code> встречается миллионы раз. Партиционирование по такому ключу создаёт одну гигантскую партицию и множество почти пустых.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как распознать перекос?</div>
+        <div class="a">В Spark UI стадия показывает сильный разброс времени задач и объёма shuffle read: медиана одна, максимум — на порядок больше. Одна task висит, остальные уже done. Иногда виден spill у единственной задачи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Перекос или мало ресурсов?</div>
+        <div class="a">Если тормозит <b>одна</b> задача при множестве быстрых — это перекос. Если медленно <b>всё</b> равномерно, но узко — скорее не хватает партиций, памяти или CPU. Различие критично: увеличение ресурсов против перекоса не помогает.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import functions as F
+
+# ищем хот-ключи
+(df.groupBy("client_id")
+   .count()
+   .orderBy(F.desc("count"))
+   .show(10))
+
+# и распределение по партициям после shuffle
+(df.groupBy(F.spark_partition_id().alias("pid"))
+   .count()
+   .orderBy(F.desc("count"))
+   .show(10))</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Перекос — не «медленный Spark», а «одна партиция делает всю работу». Пока вы не покажете это на метриках, любой совет по тюнингу будет угадыванием.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Salting и broadcast</h2>
+      <p>Разбиваем хот-ключ и убираем shuffle маленькой таблицы.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое salting и как он лечит перекос?</li>
+        <li>Когда полезен broadcast join?</li>
+        <li>Как указать broadcast через hint?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как работает salting?</div>
+        <div class="a">К хот-ключу добавляют случайный суффикс (соль), превращая один ключ в N распределённых. Обратно «расшивают» дважды агрегируя или дублируя вторую таблицу по всем значениям соли. Так тяжёлый ключ размазывается по нескольким задачам.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда broadcast спасает от перекоса?</div>
+        <div class="a">Когда одна из таблиц в join достаточно мала: Spark рассылает её целиком на каждый executor и вовсе не делает shuffle большой таблицы. Тогда перекос по ключу просто не возникает.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как задать broadcast явно?</div>
+        <div class="a">Через функцию <code>broadcast()</code> или SQL-хint <code>/*+ BROADCAST(t) */</code>. Порог автоматического бродкаста настраивается <code>spark.sql.autoBroadcastJoinThreshold</code> (по умолчанию около 10 МБ).</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import functions as F
+from pyspark.sql.functions import broadcast
+
+# broadcast маленького справочника: большого shuffle не будет
+result = big.join(broadcast(small_dict), "user_id", "left")
+
+# salting хот-ключа
+SALT = 16
+skewed = big.withColumn("salt", (F.rand() * SALT).cast("int"))
+small_salted = small_dict.crossJoin(
+    spark.range(SALT).withColumnRenamed("id", "salt")
+)
+result = skewed.join(small_salted, ["user_id", "salt"], "left")</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Бродкастят таблицу, которая не влезает в память драйвера и экзекьюторов, — получают OOM драйвера.</li>
+        <li>Забывают, что после salting нужна вторая агрегация для «сшивания» результата.</li>
+        <li>Применяют salting без проверки, что ключ действительно перекошен.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Порядок предпочтений: сначала broadcast (если можно), потом AQE skew join, и только затем ручной salting как последнее средство. Salting — мощный, но самый «ручной» инструмент.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Adaptive Query Execution</h2>
+      <p>AQE перестраивает план по фактической статистике.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое AQE и когда он включается?</li>
+        <li>Как AQE лечит перекос?</li>
+        <li>Что делает coalesce partitions и смена стратегии join?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое AQE?</div>
+        <div class="a"><b>Adaptive Query Execution</b> — оптимизация «на лету»: Spark собирает статистику во время выполнения и перестраивает план между стадиями. Включается <code>spark.sql.adaptive.enabled=true</code> (по умолчанию с Spark 3.2 включён).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие три вещи делает AQE?</div>
+        <div class="a">1) <b>Coalesce shuffle partitions</b> — склеивает мелкие пост-shuffle партиции, уменьшая число задач. 2) <b>Skew join</b> — разбивает перекошенную партицию на несколько под-задач. 3) <b>Смена стратегии join</b> — если таблица оказалась мала по факту, переключается на broadcast.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему это важно?</div>
+        <div class="a">Статические оценки по метаданным часто врут. AQE смотрит на реальные размеры и подстраивается, поэтому меньше зависит от ручной настройки <code>shuffle.partitions</code> и подсказок.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>spark.conf.set("spark.sql.adaptive.enabled", "true")
+spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+spark.conf.set("spark.sql.adaptive.advisoryPartitionSizeInBytes", "64m")
+
+# порог, при котором стратегия переключится на broadcast
+spark.conf.set("spark.sql.adaptive.autoBroadcastJoinThreshold", "30m")</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Сильный ответ уровня Senior: «сенсор AQE смотрит фактические размеры после стадии и переигрывает план — поэтому мы реже пишем ручные костыли под перекос». Дальше можно назвать все три механизма.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Память и cache</h2>
+      <p>executor/driver memory, persist и когда кэш вредит.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как устроена память экзекьютора?</li>
+        <li>Чем <code>cache</code> отличается от <code>persist</code>?</li>
+        <li>Когда кэширование вредит?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Из чего состоит память экзекьютора?</div>
+        <div class="a">Из <b>execution memory</b> (shuffle, join, sort, агрегации) и <b>storage memory</b> (кэш). Они могут «одалживать» друг другу место в одной unified-области, но <code>userMemory</code> зарезервирована под структуры данных. <code>spark.memory.fraction</code> настраивает долю под память Spark.</div>
+      </div>
+      <div class="qa">
+        <div class="q">cache vs persist?</div>
+        <div class="a"><code>cache()</code> — сокращение для <code>persist(MEMORY_AND_DISK)</code> (по умолчанию в Spark 3, ранее MEMORY_ONLY). <code>persist(level)</code> даёт выбрать уровень: только память, память+диск, с репликацией, сериализованно. Используйте кэш, когда один DataFrame участвует в нескольких действиях.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда cache вредит?</div>
+        <div class="a">Если DataFrame большой, действия разовые, а памяти мало — кэш вытеснит execution-область, вырастут spill и GC. Также вредно кэшировать DataFrame, который читается один раз.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark import StorageLevel
+
+df.persist(StorageLevel.MEMORY_AND_DISK)
+
+# несколько действий используют один и тот же расчёт
+base = big.filter(F.col("dt") == "2026-10-12").cache()
+by_country = base.groupBy("country").count()
+by_device  = base.groupBy("device").count()
+by_country.show()
+by_device.show()
+
+base.unpersist()  # освобождаем память, когда кэш больше не нужен</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Кэшируют всё подряд и получают сплошной spill.</li>
+        <li>Забывают <code>unpersist()</code> — память не возвращается до конца приложения.</li>
+        <li>Путают память драйвера и экзекьютора: результат <code>collect()</code> идёт на драйвер и легко его переполняет.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Кэш — это компромисс: экономит повторные вычисления, но забирает память у shuffle. Правило простое — кэшируй, если данных немного и к ним много обращений.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Spark UI, GC и spill</h2>
+      <p>Как читать метрики и по каким симптомам ставить диагноз.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>На какие вкладки Spark UI смотреть при тюнинге?</li>
+        <li>Как понять, что виноват GC?</li>
+        <li>Какие метрики говорят про spill?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Куда смотреть в Spark UI?</div>
+        <div class="a">В <b>Stages</b>: разброс длительности задач и shuffle read/write. В <b>SQL</b>: физический план и узлы, где больше всего времени. В <b>Executors</b>: загрузка, GC time, spill. В <b>Storage</b>: что закэшировано и насколько.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как распознать проблему GC?</div>
+        <div class="a">В Executors видна высокая доля <b>GC Time</b> от общего времени задачи, а задачи «рвутся» на паузы. Причина — избыток объектов в куче, часто из-за кэша, больших промежуточных структур или несериализуемых типов. Лечится настройкой <code>G1GC</code> и снижением давления на память.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие метрики указывают на spill?</div>
+        <div class="a"><b>Spill (Memory)</b> и <b>Spill (Disk)</b> в деталях стадии. Ненулевой spill на большой стадии — сигнал уменьшить размер партиции, увеличить память или уменьшить объём данных до shuffle.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># типовые настройки, к которым приходят при тюнинге
+--conf spark.executor.memory=16g
+--conf spark.executor.memoryOverhead=2g
+--conf spark.executor.cores=4
+--conf spark.sql.shuffle.partitions=800
+--conf spark.sql.adaptive.enabled=true
+--conf spark.executor.extraJavaOptions="-XX:+UseG1GC"</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Хорошая привычка на интервью: начать с симптома («одна task висит», «много spill», «высокий GC»), затем назвать метрику в UI, которая это подтверждает, и только потом — параметр или приём. Так видно системное мышление, а не заученный список флагов.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Тюнинг Spark — это цикл «измерь, найди узкое место, измени одно и переизмерь». Главный подозреваемый почти всегда перекос данных, и его лечат по возрастанию сложности: broadcast, затем AQE skew join, и в последнюю очередь ручной salting.</p>
+      <p class="lead">AQE стоит первым в списке включённых оптимизаций: он сам склеивает мелкие партиции, борется с перекосом и меняет стратегию join по фактическим размерам. Управление памятью и кэш — следующий слой: кэшируйте только то, к чему обращаетесь многократно, и не забывайте <code>unpersist</code>.</p>
+      <p class="lead">На Senior-интервью ценят умение читать Spark UI и называть метрику под каждый симптом. Параметр без диагноза звучит слабо; диагноз с метрикой и последующим действием — это и есть уровень Senior.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

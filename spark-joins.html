@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Join-стратегии — Spark · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Spark</div>
+    <h1>Join-стратегии</h1>
+    <p class="subtitle">Broadcast, Sort-Merge и Shuffle Hash join</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Join — самая частая тяжёлая операция в Spark, и почти всегда именно она определяет время работы job. На интервью проверяют, знаете ли вы три основные стратегии, понимаете, как Spark выбирает между ними, и умеете бороться с перекосом при соединении.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Broadcast Hash Join</a></li>
+      <li><a href="#s2">2. Sort-Merge Join</a></li>
+      <li><a href="#s3">3. Shuffle Hash Join</a></li>
+      <li><a href="#s4">4. Как выбирается стратегия</a></li>
+      <li><a href="#s5">5. Перекос при join</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Broadcast Hash Join</h2>
+      <p>Маленькую таблицу рассылаем, большую не shuffle-им.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как работает broadcast hash join?</li>
+        <li>Когда Spark выбирает его автоматически?</li>
+        <li>Какие у него ограничения?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как он работает?</div>
+        <div class="a">Маленькая таблица целиком рассылается на все экзекьюторы и держится в памяти как хеш-таблица. Большая таблица обрабатывается локально, покартиционно, без shuffle. Это самый быстрый вариант соединения, когда применим.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда происходит автоматически?</div>
+        <div class="a">Когда статистика показывает, что одна сторона меньше <code>spark.sql.autoBroadcastJoinThreshold</code> (по умолчанию около 10 МБ). Формально проверяется оценка размера, а не факт, поэтому оценка бывает неточной.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Ограничения?</div>
+        <div class="a">Таблица должна влезать в память и драйвера, и каждого экзекьютора. Слишком большой «маленькой» стороны — OOM драйвера или экзекьюторов. Также плохо работает при <code>FULL OUTER</code> join, который требует согласованного партиционирования.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql.functions import broadcast
+
+# маленький справочник -&gt; все экзекьюторы, без shuffle большой таблицы
+result = big.join(broadcast(small_dict), "user_id", "left")
+
+result.explain()
+# BroadcastHashJoin [user_id], [user_id], LeftOuter</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Насильно бродкастят таблицу, которая не влезает в память, — получают OOM.</li>
+        <li>Не понимают, что при broadcast большая таблица всё равно читается целиком.</li>
+        <li>Ожидают broadcast при full outer join.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Broadcast — стратегия по умолчанию «по возможности»: убрать shuffle большой таблицы почти всегда выгоднее всего. Следите только за тем, чтобы маленькая сторона действительно была маленькой.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Sort-Merge Join</h2>
+      <p>Стратегия для больших таблиц: сортировка и слияние.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как работает sort-merge join?</li>
+        <li>Почему он выдерживает большие объёмы?</li>
+        <li>Когда он — стратегия по умолчанию?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как он работает?</div>
+        <div class="a">Обе стороны shuffle-ятся по ключу join, затем сортируются, а потом сливаются проходом по отсортированным последовательностям. Сортировка даёт предсказуемый доступ и позволяет обходиться без загрузки всей стороны в память.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему он масштабируется?</div>
+        <div class="a">Потому что не требует держать одну таблицу целиком в памяти: работает по партициям отсортированных данных, используя и память, и диск. Это разумный выбор, когда обе таблицы большие.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Минусы?</div>
+        <div class="a">Два shuffle и дорогая сортировка. Если ключей мало и присутствует перекос, одна партиция может стать непосильно большой. Поэтому sort-merge чувствителен к распределению ключей.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># обе таблицы большие -&gt; sort-merge join по умолчанию
+result = big_left.join(big_right, "user_id", "inner")
+
+result.explain()
+# SortMergeJoin [user_id], [user_id], Inner
+# :- Sort ...            &lt;- обе стороны сортируются
+# +- Sort ...</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Если убрать всю специфику, идея такая: broadcast — не shuffle большого, sort-merge — корректно обработать два больших набора. Именно sort-merge чаще всего и запускается, когда обе таблицы большие.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Shuffle Hash Join</h2>
+      <p>Хеш-таблица на партицию вместо сортировки.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем shuffle hash join отличается от sort-merge?</li>
+        <li>Когда он может быть выгоднее sort-merge?</li>
+        <li>Почему он реже включается?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как он работает?</div>
+        <div class="a">Обе стороны shuffle-ятся по ключу, после чего Spark строит хеш-таблицу по меньшей стороне и прогоняет через неё большую. Сортировка не нужна — отсюда потенциальный выигрыш.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда выгоден?</div>
+        <div class="a">Когда одна сторона достаточно мала, чтобы построить по ней хеш-таблицу в памяти, но при этом не настолько мала для broadcast. Тогда экономится дорогая сортировка обеих сторон.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему редко включается?</div>
+        <div class="a">По умолчанию в Spark 3 он отключён (<code>spark.sql.join.preferSortMergeJoin=true</code>), потому что требует, чтобы меньшая сторона партиции уверенно помещалась в память, иначе начнётся spill. Его включают осознанно через hint.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>spark.sql("""
+  SELECT /*+ SHUFFLE_HASH(a, b) */ *
+  FROM orders a
+  JOIN products b ON a.product_id = b.product_id
+""")
+
+# план покажет ShuffledHashJoin вместо SortMergeJoin</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>На интервью достаточно назвать нишу: «shuffle hash — компромисс между broadcast и sort-merge, когда одна сторона мала, но не помещается в память для рассылки». Не стоит углубляться дальше, если не спросят.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Как выбирается стратегия</h2>
+      <p>Статистика, пороги и join hints.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>По какому принципу Spark выбирает стратегию join?</li>
+        <li>Какие hint-ы есть и зачем они?</li>
+        <li>Почему оценка размера может ошибаться?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как Spark выбирает?</div>
+        <div class="a">По логике планировщика: если одна сторона меньше порога broadcast — broadcast hash join; иначе, при включённом shuffle hash и подходящем размере — shuffled hash; иначе — sort-merge. На решение влияет статистика (метаданные, размер файлов, каталог) и наличие hint.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие есть hints?</div>
+        <div class="a"><code>/*+ BROADCAST(t) */</code> — навязать broadcast, <code>/*+ SHUFFLE_HASH(a, b) */</code> — shuffled hash, <code>/*+ MERGE(a, b) */</code> — sort-merge, <code>/*+ SHUFFLE_REPLICATE_NL(a, b) */</code> — replicated nested loop для неэкви-join. Есть и версии со стратегией соединения (BROADCAST/SHUFFLE_MERGE и т.д.).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему оценка размера врёт?</div>
+        <div class="a">Spark опирается на статистику, которая может быть устаревшей или отсутствовать (например, после сложных выражений и UDF). Из-за этого он иногда бродкастит «маленькую» таблицу, которая по факту огромна. AQE и <code>ANALYZE TABLE</code> помогают поправить ситуацию.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># явные подсказки стратегии (Spark SQL)
+spark.sql("""
+  SELECT /*+ BROADCAST(d) */ *
+  FROM events e JOIN dim d ON e.dim_id = d.id
+""")
+
+spark.sql("""
+  SELECT /*+ MERGE(a, b) */ *
+  FROM big_a a JOIN big_b b ON a.id = b.id
+""")
+
+# обновление статистики помогает планировщику
+spark.sql("ANALYZE TABLE events COMPUTE STATISTICS")</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Ставят hint, не проверив план через <code>explain()</code>.</li>
+        <li>Ожидают, что hint всегда выиграет: неверный hint может ухудшить план.</li>
+        <li>Забывают обновлять статистику таблиц перед тяжёлыми join.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Hint — это подсказка, а не приказ оптимизатору в обход реальности. Правильный подход: сначала посмотреть план, понять, что не так, и только затем вмешаться подсказкой или AQE.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Перекос при join</h2>
+      <p>Хот-ключи на сторонах соединения и способы их сгладить.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Почему join особенно чувствителен к перекосу?</li>
+        <li>Как справиться с перекосом при join?</li>
+        <li>Когда перекос появляется из-за NULL?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Почему join страдает от перекоса?</div>
+        <div class="a">При shuffle обе стороны делятся по ключу. Если один ключ встречается у большинства строк, вся его доля попадает в одну партицию — одна задача обрабатывает почти весь объём, остальные простаивают.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как с этим бороться?</div>
+        <div class="a">По возрастанию сложности: убрать хот-ключи фильтром, если они не нужны; использовать broadcast, если одна сторона мала; включить AQE skew join; применить salting хот-ключа; в крайнем случае разделить хот-ключ и обработать отдельно.</div>
+      </div>
+      <div class="qa">
+        <div class="q">При чём тут NULL?</div>
+        <div class="a"><code>NULL</code> в ключе join не совпадает ни с чем (по правилам SQL), но все строки с <code>NULL</code> уходят в одну и ту же партицию. На больших объёмах это сама по себе огромная партиция, хотя полезного соединения не даёт.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import functions as F
+
+# 1) отсечь бесполезные NULL до join
+left = left.filter(F.col("user_id").isNotNull())
+
+# 2) если один ключ-хот-ключ, можно вынести его отдельно
+hot = left.filter(F.col("user_id") == 0)
+rest = left.filter(F.col("user_id") != 0)
+
+joined_rest = rest.join(dim, "user_id")          # без перекоса
+joined_hot = hot.join(broadcast(dim), "user_id") # маленькая сторона -&gt; broadcast
+result = joined_rest.unionByName(joined_hot)</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Перекос при join — самая частая причина «зависшего» job в проде. Порядок действий запомните как алгоритм: фильтр, broadcast, AQE, и только потом ручной salting или вынос хот-ключа.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Три стратегии join — это три точки на шкале «сколько бы данных мы готовы возить по сети». Broadcast старается не shuffle-ить большую таблицу, sort-merge честно обрабатывает две большие стороны, shuffled hash ищет компромисс по памяти.</p>
+      <p class="lead">Выбор стратегии делает планировщик по статистике, а вы влияете на него hint-ами и AQE. Но помните главное: никакая стратегия не спасёт от перекоса. Хот-ключ превращает самую масштабируемую операцию в последовательную.</p>
+      <p class="lead">Уверенный Senior-ответ строится вокруг одного алгоритма: сначала убрать лишние данные и хот-ключи, затем попробовать broadcast, затем положиться на AQE, и только потом браться за salting. Так вы показываете и знание движка, и инженерное мышление.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

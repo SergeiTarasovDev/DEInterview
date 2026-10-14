@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Оконные функции — SQL · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">SQL</div>
+    <h1>Оконные функции</h1>
+    <p class="subtitle">OVER, PARTITION BY, ранжирование и нарастающие итоги</p>
+    <div class="meta-row">
+      <span class="level j">Junior</span><span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Оконные функции — обязательная тема на любом собеседовании DE. Спрашивают почти всегда: в задачах «топ-1 на группу», дедупликации, сравнении строки с предыдущей. Проверяют не синтаксис, а понимание, чем окно отличается от группировки.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Как устроено окно</a></li>
+      <li><a href="#s2">2. Ранжирование</a></li>
+      <li><a href="#s3">3. Смещение строк</a></li>
+      <li><a href="#s4">4. Агрегаты и рамки</a></li>
+      <li><a href="#s5">5. Задачи с решениями</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Как устроено окно</h2>
+      <p>Чем OVER отличается от GROUP BY и из чего он состоит.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем оконная функция отличается от агрегата с GROUP BY?</li>
+        <li>Что делают PARTITION BY, ORDER BY и рамка окна?</li>
+        <li>Почему оконная функция не выполняется в WHERE?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Чем окно отличается от GROUP BY?</div>
+        <div class="a">GROUP BY <b>схлопывает</b> строки: на группу остаётся одна строка. Окно считает агрегат, но <b>сохраняет каждую исходную строку</b> и добавляет к ней результат. Поэтому в одном запросе можно сразу видеть и детальную строку, и её агрегат по группе.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Из чего состоит OVER()?</div>
+        <div class="a">Из трёх частей: <code>PARTITION BY</code> — на какие группы делим строки; <code>ORDER BY</code> — как упорядочиваем внутри группы (нужен для ранжирования и рамок); рамка (например <code>ROWS BETWEEN ...</code>) — какие строки окна участвуют в вычислении.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему нельзя написать окно в WHERE?</div>
+        <div class="a">Логический порядок выполнения: <code>WHERE</code> выполняется до оконных функций. Отфильтровать результат окна можно только во внешнем запросе или в <code>QUALIFY</code> (если он поддерживается — например, в Snowflake, DuckDB, BigQuery).</div>
+      </div>
+
+      <ul class="keys">
+        <li><code>PARTITION BY</code> задаёт группы, внутри которых считаем; без него окно — вся выборка.</li>
+        <li><code>ORDER BY</code> в окне не сортирует финальный результат — он задаёт порядок внутри окна.</li>
+        <li>Без <code>ORDER BY</code> рамка по умолчанию — все строки партиции; с <code>ORDER BY</code> — от начала до текущей строки.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Держите в голове одну мысль: окно не меняет число строк. Если в задаче сказано «и при этом сохранить детализацию» — это почти всегда сигнал к оконной функции.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Ранжирование</h2>
+      <p>ROW_NUMBER, RANK, DENSE_RANK — и когда какой брать.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Разница между ROW_NUMBER, RANK и DENSE_RANK?</li>
+        <li>Как достать топ-1 (или топ-N) на каждую группу?</li>
+        <li>Как удалить дубликаты, оставив самую свежую запись?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">ROW_NUMBER vs RANK vs DENSE_RANK?</div>
+        <div class="a">При равных значениях <code>ROW_NUMBER</code> выдаёт уникальные номера подряд (1, 2, 3, 4), <code>RANK</code> даёт одинаковым одинаковый номер и <b>пропускает</b> следующие (1, 1, 3, 4), а <code>DENSE_RANK</code> не пропускает (1, 1, 2, 3).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как взять топ-1 на группу?</div>
+        <div class="a">Нумеруем строки внутри группы и фильтруем по номеру во внешнем запросе. Именно снаружи — потому что фильтровать окно в <code>WHERE</code> нельзя.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- последний заказ каждого клиента
+SELECT client_id, order_id, amount, created_at
+FROM (
+  SELECT
+    o.*,
+    ROW_NUMBER() OVER (
+      PARTITION BY client_id
+      ORDER BY created_at DESC
+    ) AS rn
+  FROM orders o
+) t
+WHERE rn = 1;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются отфильтровать <code>rn = 1</code> в том же запросе — так нельзя, нужен подзапрос или CTE.</li>
+        <li>Берут <code>RANK</code> там, где нужна ровно одна строка на группу — при равенстве ключей получите несколько.</li>
+        <li>Забывают детерминировать сортировку: при одинаковом <code>created_at</code> результат «плавает».</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Одна фраза для интервью: «row_number — всегда уникален, rank — соревновательный, dense_rank — без пропусков». Этого достаточно, чтобы снять вопрос.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Смещение строк</h2>
+      <p>LAG, LEAD и FIRST_VALUE — сравнение с соседними строками.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как посчитать изменение метрики к прошлому периоду?</li>
+        <li>Как найти первый заказ клиента?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что делают LAG и LEAD?</div>
+        <div class="a"><code>LAG</code> возвращает значение из предыдущей строки окна, <code>LEAD</code> — из следующей. Второй аргумент — на сколько строк назад/вперёд, третий — значение по умолчанию, если строки нет.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- прирост выручки к предыдущему месяцу
+SELECT
+  month,
+  revenue,
+  revenue - LAG(revenue, 1, 0) OVER (ORDER BY month) AS delta
+FROM monthly_revenue;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Если задача звучит как «сравнить с предыдущим / следующим», это LAG/LEAD. Если «первое или последнее в группе» — FIRST_VALUE/LAST_VALUE, причём для LAST_VALUE нужно явно задать рамку до конца партиции.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Агрегаты и рамки</h2>
+      <p>Нарастающие итоги, скользящее окно и роль ROWS BETWEEN.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как посчитать нарастающий итог (running total)?</li>
+        <li>Что такое рамка окна и как задать скользящий период?</li>
+        <li>Чем ROWS отличается от RANGE?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как сделать running total?</div>
+        <div class="a">Использовать агрегат как оконную функцию с <code>ORDER BY</code>: рамка по умолчанию (от начала партиции до текущей строки) как раз и даёт нарастающий итог.</div>
+      </div>
+      <div class="qa">
+        <div class="q">ROWS или RANGE?</div>
+        <div class="a"><code>ROWS</code> считает по физическим строкам, <code>RANGE</code> — по значениям <code>ORDER BY</code> и включает все строки с одинаковым значением. Если в датах или метрике есть дубли, разница становится заметной.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- нарастающий итог и скользящее среднее за 3 дня
+SELECT
+  day,
+  amount,
+  SUM(amount) OVER (ORDER BY day) AS running_total,
+  AVG(amount) OVER (
+    ORDER BY day
+    ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+  ) AS avg_3d
+FROM daily_sales;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Рамка — то, чем опытный кандидат отличается от начинающего: первый сразу уточняет <code>ROWS</code>/<code>RANGE</code> и границы, второй берёт поведение по умолчанию и получает неверный итог на дублях.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Задачи с решениями</h2>
+      <p>Три типовые задачи, которые любят давать на SQL-секции.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача 1. Вторая по величине зарплата</div>
+      <pre class="code"><code>SELECT DISTINCT salary
+FROM (
+  SELECT salary, DENSE_RANK() OVER (ORDER BY salary DESC) AS rk
+  FROM employees
+) t
+WHERE rk = 2;</code></pre>
+      <p class="lead">Здесь нужен именно <code>DENSE_RANK</code>: при одинаковых зарплатах «вторая по величине» не должна пропадать.</p>
+
+      <div class="blocklabel">Задача 2. Дедупликация с выбором свежей записи</div>
+      <pre class="code"><code>SELECT *
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY user_id
+    ORDER BY updated_at DESC, id DESC
+  ) AS rn
+  FROM users_raw
+) t
+WHERE rn = 1;</code></pre>
+
+      <div class="blocklabel">Задача 3. Непрерывные дни активности (gaps and islands)</div>
+      <pre class="code"><code>WITH numbered AS (
+  SELECT
+    user_id,
+    activity_date,
+    activity_date - INTERVAL '1 day' * ROW_NUMBER() OVER (
+      PARTITION BY user_id ORDER BY activity_date
+    ) AS grp
+  FROM activity
+)
+SELECT user_id, MIN(activity_date) AS start_date, MAX(activity_date) AS end_date
+FROM numbered
+GROUP BY user_id, grp;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>На интервью важно проговаривать план: «сначала нумерую внутри группы, потом фильтрую снаружи». Молчаливое написание кода — самая частая причина провала SQL-секции, даже когда запрос верный.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Оконные функции — это про контекст строки. Как только в задаче появляется «внутри группы», «по каждому клиенту», «сравнить с предыдущим» или «не потерять детализацию», речь почти наверняка про <code>OVER</code>.</p>
+      <p class="lead">Запомните три опоры: <b>разбиение</b> (PARTITION BY), <b>порядок</b> (ORDER BY) и <b>рамку</b> (ROWS/RANGE BETWEEN). И держите в голове порядок выполнения: окно считается после WHERE и GROUP BY, поэтому фильтровать его нужно снаружи или в QUALIFY.</p>
+      <p class="lead">Отдельно потренируйтесь объяснять вслух разницу ROW_NUMBER / RANK / DENSE_RANK и показывать на доске, почему решение требует подзапроса. Именно этот «рассказ вслух» и оценивает интервьюер.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

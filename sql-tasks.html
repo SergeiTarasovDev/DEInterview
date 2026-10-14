@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Задачи с решениями — SQL · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">SQL</div>
+    <h1>Задачи с решениями</h1>
+    <p class="subtitle">Top-N, воронка, retention, gaps and islands</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Этот раздел — практикум. Здесь собраны задачи, которые чаще всего дают на SQL-секции для Middle и Senior: top-N на группу, дедупликация, воронка конверсии, retention по когортам, gaps and islands, поиск пропущенных идентификаторов, иерархия и нарастающий итог. Для каждой — готовое решение и короткое пояснение, почему оно работает именно так.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Top-N на группу и дедупликация</a></li>
+      <li><a href="#s2">2. Воронка конверсии</a></li>
+      <li><a href="#s3">3. Retention по когортам</a></li>
+      <li><a href="#s4">4. Gaps and islands и пропущенные id</a></li>
+      <li><a href="#s5">5. Иерархия и running total</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Top-N на группу и дедупликация</h2>
+      <p>Классика с оконными функциями.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача 1. Топ-3 товара по выручке в каждой категории</div>
+      <p class="lead">Нумеруем строки внутри категории по убыванию выручки и оставляем первые три во внешнем запросе, потому что фильтровать окно в WHERE нельзя.</p>
+      <pre class="code"><code>WITH ranked AS (
+  SELECT
+    category_id,
+    product_id,
+    revenue,
+    ROW_NUMBER() OVER (
+      PARTITION BY category_id
+      ORDER BY revenue DESC, product_id
+    ) AS rn
+  FROM product_revenue
+)
+SELECT category_id, product_id, revenue
+FROM ranked
+WHERE rn &lt;= 3
+ORDER BY category_id, rn;</code></pre>
+
+      <div class="blocklabel">Задача 2. Дедупликация: оставить самую свежую запись</div>
+      <p class="lead">Если нужна ровно одна строка на ключ — <code>ROW_NUMBER</code>. Если нужны все строки-победители при равных датах — <code>RANK</code>.</p>
+      <pre class="code"><code>SELECT *
+FROM (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_id
+      ORDER BY updated_at DESC, id DESC
+    ) AS rn
+  FROM users_raw
+) t
+WHERE rn = 1;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются отфильтровать номер строки в том же SELECT — нужен CTE или подзапрос.</li>
+        <li>Не добавляют второй ключ сортировки — при равных датах результат «плавает» между запусками.</li>
+        <li>Берут <code>RANK</code> для топ-N, ожидая ровно N строк, а получают больше при равенстве значений.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Формула «нумеруем внутри группы → фильтруем снаружи» закрывает и top-N, и дедупликацию. Проговаривайте её вслух — интервьюер оценивает ход мысли.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Воронка конверсии</h2>
+      <p>Сколько пользователей доходит до каждого шага.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача. Воронка: визит → регистрация → заказ → оплата</div>
+      <p class="lead">Считаем уникальных пользователей на каждом шаге и конверсию относительно первого шага. Используем условную агрегацию, чтобы получить все шаги за один проход.</p>
+      <pre class="code"><code>SELECT
+  COUNT(DISTINCT CASE WHEN step = 'visit'    THEN user_id END) AS visits,
+  COUNT(DISTINCT CASE WHEN step = 'signup'   THEN user_id END) AS signups,
+  COUNT(DISTINCT CASE WHEN step = 'order'    THEN user_id END) AS orders,
+  COUNT(DISTINCT CASE WHEN step = 'paid'     THEN user_id END) AS paid,
+  ROUND(
+    COUNT(DISTINCT CASE WHEN step = 'paid' THEN user_id END) * 100.0
+    / NULLIF(COUNT(DISTINCT CASE WHEN step = 'visit' THEN user_id END), 0)
+  , 2) AS paid_conversion_pct
+FROM events;</code></pre>
+
+      <p class="lead">Если у пользователя может быть несколько событий на шаге, <code>DISTINCT</code> обязателен — иначе один активный пользователь раздувает воронку. Помните, что воронка «засчитывает» шаг всем, кто его сделал, даже если порядок событий не соблюдён; для строгой последовательности нужно дополнительно проверять, что шаг случился после предыдущего.</p>
+
+      <div class="blocklabel">Строгая воронка: шаг только после предыдущего</div>
+      <pre class="code"><code>WITH steps AS (
+  SELECT
+    user_id,
+    MIN(CASE WHEN step = 'visit'  THEN ts END) AS t_visit,
+    MIN(CASE WHEN step = 'signup' THEN ts END) AS t_signup,
+    MIN(CASE WHEN step = 'paid'   THEN ts END) AS t_paid
+  FROM events
+  GROUP BY user_id
+)
+SELECT
+  COUNT(*) FILTER (WHERE t_visit IS NOT NULL)                    AS visits,
+  COUNT(*) FILTER (WHERE t_signup &gt;= t_visit)                    AS signups,
+  COUNT(*) FILTER (WHERE t_paid   &gt;= t_signup)                   AS paid
+FROM steps;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Уточняющий вопрос «считать событие в любом порядке или строго по цепочке» показывает Senior-уровень: он сразу видит, что «плоская» воронка и «строгая» дают разные числа.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Retention по когортам</h2>
+      <p>Возвращаемость пользователей по месяцам первой активности.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача. Retention по месячным когортам</div>
+      <p class="lead">Сначала определяем когорту — месяц первой активности пользователя. Затем «разворачиваем» активность в номер месяца относительно когорты и считаем долю вернувшихся.</p>
+      <pre class="code"><code>WITH first_seen AS (
+  SELECT
+    user_id,
+    MIN(DATE_TRUNC('month', activity_date)) AS cohort_month
+  FROM activity
+  GROUP BY user_id
+),
+activity_flag AS (
+  SELECT DISTINCT
+    a.user_id,
+    f.cohort_month,
+    DATE_TRUNC('month', a.activity_date) AS activity_month
+  FROM activity a
+  JOIN first_seen f USING (user_id)
+),
+cohort_size AS (
+  SELECT cohort_month, COUNT(*) AS users
+  FROM first_seen
+  GROUP BY cohort_month
+)
+SELECT
+  af.cohort_month,
+  DATEDIFF('month', af.cohort_month, af.activity_month) AS month_no,
+  COUNT(DISTINCT af.user_id) AS active_users,
+  cs.users AS cohort_users,
+  ROUND(COUNT(DISTINCT af.user_id) * 100.0 / cs.users, 2) AS retention_pct
+FROM activity_flag af
+JOIN cohort_size cs USING (cohort_month)
+GROUP BY af.cohort_month, month_no, cs.users
+ORDER BY af.cohort_month, month_no;</code></pre>
+
+      <p class="lead">Ключевые детали: когорта вычисляется один раз по <b>первой</b> активности; месяц активности сравнивается с когортой через <code>DATEDIFF</code>; знаменатель — размер когорты, а не число активных в месяце. Без <code>DISTINCT</code> по user_id за месяц метрика завышается.</p>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Считают когорту по последней активности или пересчитывают на каждом шаге — таблица «плывёт».</li>
+        <li>Делят на число активных пользователей вместо размера когорты.</li>
+        <li>Забывают <code>DISTINCT</code>: один пользователь с несколькими сессиями считается многократно.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Retention — это всегда «когорта × период». Сформулируйте для интервьюера, что такое когорта (месяц первой активности) и что стоит в числителе и знаменателе, — и задача превращается в технику.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Gaps and islands и пропущенные id</h2>
+      <p>Непрерывные интервалы и дыры в последовательностях.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача 1. Gaps and islands: серии непрерывных дат</div>
+      <p class="lead">Трюк в том, что от даты вычитается её номер по порядку. Внутри непрерывного «острова» разность постоянна — по ней и группируем.</p>
+      <pre class="code"><code>WITH numbered AS (
+  SELECT
+    user_id,
+    activity_date,
+    activity_date - INTERVAL '1 day' * ROW_NUMBER() OVER (
+      PARTITION BY user_id
+      ORDER BY activity_date
+    ) AS grp
+  FROM (
+    SELECT DISTINCT user_id, activity_date FROM activity
+  ) d
+)
+SELECT
+  user_id,
+  MIN(activity_date) AS start_date,
+  MAX(activity_date) AS end_date,
+  COUNT(*)           AS length_days
+FROM numbered
+GROUP BY user_id, grp
+ORDER BY user_id, start_date;</code></pre>
+
+      <div class="blocklabel">Задача 2. Поиск пропущенных id</div>
+      <p class="lead">Сравниваем существующие значения с полным диапазоном и находим дыры через <code>LEAD</code> — расстояние между соседними id больше единицы означает пропуск.</p>
+      <pre class="code"><code>-- пропуски внутри диапазона id
+SELECT
+  id AS gap_start,
+  next_id - 1 AS gap_end,
+  next_id - id - 1 AS missing_count
+FROM (
+  SELECT
+    id,
+    LEAD(id) OVER (ORDER BY id) AS next_id
+  FROM items
+) t
+WHERE next_id IS NOT NULL
+  AND next_id - id &gt; 1;</code></pre>
+
+      <p class="lead">Для «универсального» решения без опоры на <code>LEAD</code> можно сгенерировать полный ряд (через <code>generate_series</code> или календарную таблицу) и найти значения, которых нет в основной таблице, через anti-join.</p>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Забывают <code>DISTINCT</code> по датам — дубликаты ломают нумерацию и «острова» рвутся.</li>
+        <li>Считают разность типов некорректно (дата минус число в разных СУБД работает по-разному).</li>
+        <li>Ищут пропуски <code>NOT IN</code> вместо anti-join — риск NULL и медленный план.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Gaps and islands — это один приём: «дата минус row_number». Научитесь выводить его на доске с примером из пяти строк — и вопрос закрыт для любого набора данных.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Иерархия и running total</h2>
+      <p>Обход дерева через self-join и нарастающие итоги.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Задача 1. Иерархия сотрудников: путь до руководителя</div>
+      <p class="lead">Рекурсивный CTE разворачивает дерево: начинаем с корня (где <code>manager_id IS NULL</code>) и на каждом шаге присоединяем подчинённых, накапливая путь.</p>
+      <pre class="code"><code>WITH RECURSIVE org AS (
+  SELECT
+    id,
+    name,
+    manager_id,
+    1 AS level,
+    name::text AS path
+  FROM employees
+  WHERE manager_id IS NULL
+
+  UNION ALL
+
+  SELECT
+    e.id,
+    e.name,
+    e.manager_id,
+    o.level + 1,
+    o.path || ' / ' || e.name
+  FROM employees e
+  JOIN org o ON e.manager_id = o.id
+)
+SELECT id, name, level, path
+FROM org
+ORDER BY path;</code></pre>
+
+      <p class="lead">Базовый случай — корень, рекурсивная часть — подчинённые. <code>level</code> даёт глубину, <code>path</code> — человекочитаемый маршрут. Обязательно предусмотрите защиту от циклов в реальных данных.</p>
+
+      <div class="blocklabel">Задача 2. Нарастающий итог и доля от общего</div>
+      <p class="lead">Нарастающий итог — сумма с <code>ORDER BY</code> и рамкой по умолчанию. Доля считается делением на общий итог, который берётся окном без <code>ORDER BY</code>.</p>
+      <pre class="code"><code>SELECT
+  day,
+  amount,
+  SUM(amount) OVER (ORDER BY day) AS running_total,
+  SUM(amount) OVER ()             AS grand_total,
+  ROUND(
+    SUM(amount) OVER (ORDER BY day) * 100.0
+    / NULLIF(SUM(amount) OVER (), 0)
+  , 2) AS running_share_pct
+FROM daily_sales
+ORDER BY day;</code></pre>
+
+      <p class="lead">Обратите внимание: оконная сумма с <code>ORDER BY</code> нарастает, а без него — это итог по всей выборке. Отсюда и получается кумулятивная доля. <code>NULLIF</code> защищает от деления на ноль на пустых данных.</p>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Забывают базовый случай в рекурсивном CTE — запрос не завершается или возвращает пусто.</li>
+        <li>Не ограничивают глубину рекурсии — в данных с циклом запрос уходит в бесконечность.</li>
+        <li>Берут <code>SUM(...) OVER ()</code> там, где нужен нарастающий итог, — получают константу вместо кумуляции.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Два разных инструмента: иерархия — это <code>WITH RECURSIVE</code>, нарастающий итог — это окно с <code>ORDER BY</code>. Не смешивайте их: дерево нельзя развернуть оконной функцией, а running total не нужен рекурсивный CTE.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Все задачи этого раздела — это небольшая библиотека шаблонов: «нумеруем внутри группы → фильтруем снаружи» (top-N, дедупликация), «условная агрегация с DISTINCT» (воронка), «когорта × период» (retention), «дата минус row_number» (gaps and islands), «WITH RECURSIVE» (иерархия) и «SUM OVER (ORDER BY ...)» (running total). Узнавайте в новой формулировке знакомый каркас.</p>
+      <p class="lead">На собеседовании ценят не скорость написания кода, а проговаривание допущений: уникален ли ключ, нужен ли строгий порядок событий, что считать знаменателем метрики, могут ли быть NULL и дубликаты. Именно эти уточнения отличают Middle от Senior.</p>
+      <p class="lead">Практикуйтесь решать каждую задачу двумя способами — через окно и через self-join или подзапрос — и объяснять, какой из них вы предпочтёте и почему. Такой разговор показывает и глубину, и инженерную зрелость.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

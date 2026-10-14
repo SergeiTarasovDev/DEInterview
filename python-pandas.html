@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pandas: join и groupby — Python · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Python</div>
+    <h1>pandas: join и groupby</h1>
+    <p class="subtitle">merge, groupby-agg и transform</p>
+    <div class="meta-row">
+      <span class="level j">Junior</span><span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">pandas — рабочий инструмент DE для разбора выгрузок, прототипов витрин и проверки цифр. На интервью спрашивают не список методов, а понимание: как соединяются таблицы, что происходит с гранулярностью и почему после merge внезапно стало больше строк.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. merge и параметр how</a></li>
+      <li><a href="#s2">2. Гранулярность после merge</a></li>
+      <li><a href="#s3">3. groupby.agg и transform</a></li>
+      <li><a href="#s4">4. Индексы и работа с датами</a></li>
+      <li><a href="#s5">5. Память, pivot и melt</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>merge и параметр how</h2>
+      <p>Виды соединений, суффиксы и как не потерять строки.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем merge отличается от join и concat?</li>
+        <li>Что делают how='inner', 'left', 'right', 'outer' в терминах SQL?</li>
+        <li>Что случится с колонками с одинаковыми именами?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">merge и join — это одно и то же?</div>
+        <div class="a"><code>pd.merge</code> — основная функция соединения по ключам, а <code>DataFrame.join</code> — это удобная обёртка, которая по умолчанию соединяет <b>по индексу</b>. Для соединений по колонкам используют <code>merge</code> или <code>DataFrame.merge</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как how='left' соотносится с SQL LEFT JOIN?</div>
+        <div class="a">Прямо: <code>inner</code> — пересечение ключей, <code>left</code> — все строки левой таблицы, <code>right</code> — все строки правой, <code>outer</code> — объединение ключей обеих. Слева в pandas — таблица, у которой вызван метод.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем параметры on и how?</div>
+        <div class="a"><code>on</code> задаёт общий ключ для обеих таблиц; если имена разные — используют <code>left_on</code> и <code>right_on</code>. <code>how</code> определяет, какие ключи сохранить в результате.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import pandas as pd
+
+result = pd.merge(
+    orders, customers,
+    on="customer_id",
+    how="left",
+    suffixes=("_order", "_customer")
+)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>После <code>merge</code> без явного <code>how</code> получают <code>inner</code> и теряют строки без пары.</li>
+        <li>Забывают про <code>suffixes</code>, когда в обеих таблицах есть одинаковые колонки (например, <code>name</code>).</li>
+        <li>Путают направление: считают, что <code>how='left'</code> сохраняет правую таблицу.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>merge — это SQL JOIN. Если вы уверенно маппите how на INNER/LEFT/RIGHT/FULL, вопрос закрыт: дальше интервьюер перейдёт к гранулярности.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Гранулярность после merge</h2>
+      <p>Почему строк стало больше и как это контролировать.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как понять, что ключ соединения уникален?</li>
+        <li>Что делают validate и indicator?</li>
+        <li>Как избежать размножения строк при join с справочником?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Почему после merge строк стало больше?</div>
+        <div class="a">Потому что ключ в правой таблице не уникален: одна строка слева совпала с несколькими справа, и соединение размножило результат. Это классическая ошибка «раздутия» при соединении с историей или справочником с дублями.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как проконтролировать уникальность ключа?</div>
+        <div class="a">Параметр <code>validate</code>: например <code>validate="one_to_many"</code> или <code>"one_to_one"</code> вызовет ошибку, если кардинальность не совпала. Ещё вариант — заранее проверить <code>df["key"].is_unique</code> и <code>df.duplicated("key").sum()</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что делает indicator=True?</div>
+        <div class="a">Добавляет колонку <code>_merge</code> со значениями <code>both</code>, <code>left_only</code>, <code>right_only</code>. Удобно, чтобы быстро увидеть, какие строки не нашли пару, не строя отдельный anti-join.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>checked = pd.merge(
+    orders, customers,
+    on="customer_id",
+    how="left",
+    validate="many_to_one",
+    indicator=True
+)
+
+missing = checked[checked["_merge"] == "left_only"]</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Не проверяют количество строк до и после join — «раздутие» замечают уже на этапе отчёта.</li>
+        <li>Соединяют с таблицей, где ключ с дублями, вместо предварительной агрегации до нужной гранулярности.</li>
+        <li>Игнорируют <code>NaN</code> в ключе соединения — такие строки не находят пару даже при <code>outer</code>.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Фраза для интервью: «перед join всегда фиксирую ожидаемую гранулярность и проверяю её через validate или сравнение числа строк». Это показывает зрелость, а не знание синтаксиса.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>groupby.agg и transform</h2>
+      <p>Агрегация со схлопыванием и агрегация с сохранением строк.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем agg отличается от transform?</li>
+        <li>Как посчитать несколько метрик за один вызов?</li>
+        <li>Когда нужен apply?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">agg или transform?</div>
+        <div class="a"><code>agg</code> <b>схлопывает</b> группы — на выходе одна строка на группу (как GROUP BY). <code>transform</code> возвращает результат <b>той же длины</b>, что и исходный объект, и вычисление «растягивается» на каждую строку группы. Это ровно то же различие, что окно против GROUP BY в SQL.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как получить несколько агрегатов сразу?</div>
+        <div class="a">Передать словарь: колонка → список функций. Плоские имена колонок можно потом собрать через <code>flatten</code> или многоуровневый индекс.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Чем apply отличается от agg?</div>
+        <div class="a"><code>agg</code> рассчитан на встроенные функции и работает быстро. <code>apply</code> — общий инструмент: он вызывает Python-функцию для каждой группы, поэтому гибок, но <b>медленнее</b>. Его берут, когда логика не выражается встроенными агрегатами.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import pandas as pd
+
+summary = orders.groupby("customer_id").agg(
+    revenue=("amount", "sum"),
+    orders_cnt=("order_id", "count"),
+    avg_amount=("amount", "mean")
+)
+
+orders["customer_revenue"] = orders.groupby(
+    "customer_id"
+)["amount"].transform("sum")
+
+orders["share"] = orders["amount"] / orders["customer_revenue"]</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Используют <code>transform</code>, ожидая схлопнутый результат, и получают серию исходной длины.</li>
+        <li>Пишут <code>apply</code> там, где хватило бы <code>agg</code> — теряют производительность.</li>
+        <li>Забывают, что результат <code>transform</code> выровнен по индексу исходного датафрейма.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Связка «agg схлопывает, transform сохраняет строки» — прямой аналог «GROUP BY против оконной функции». Проговорите эту параллель: интервьюер любит кандидатов, которые видят общую логику между SQL и pandas.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Индексы и работа с датами</h2>
+      <p>set_index/reset_index, to_datetime и resample.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Зачем нужен индекс и когда его сбрасывать?</li>
+        <li>Как превратить строку в дату и следить за форматом?</li>
+        <li>Как агрегировать по времени, а не по строкам?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">set_index и reset_index — зачем?</div>
+        <div class="a"><code>set_index</code> делает колонку индексом — это ускоряет выборки по ней и нужно для <code>resample</code>. <code>reset_index</code> возвращает индекс обратно в колонку. Часто индекс мешает: после <code>groupby</code> ключи уезжают в индекс, и их возвращают через <code>reset_index</code>.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как работать с датами из строк?</div>
+        <div class="a"><code>pd.to_datetime(col, errors="coerce")</code> превращает строки в <code>datetime64</code>; нераспознанные значения при <code>coerce</code> становятся <code>NaT</code>. Формат можно задать явно через <code>format</code> — это быстрее и надёжнее автоопределения.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что делает resample?</div>
+        <div class="a">Это <code>groupby</code> по времени: данные агрегируются в интервалы (день, неделя, месяц). Требует <code>DatetimeIndex</code>, поэтому сначала <code>to_datetime</code>, затем <code>set_index</code>, затем <code>resample("D").sum()</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import pandas as pd
+
+df["dt"] = pd.to_datetime(df["dt"], errors="coerce")
+daily = (
+    df.set_index("dt")
+      .resample("D")["amount"]
+      .sum()
+      .reset_index()
+)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Вызывают <code>resample</code> по колонке, а не по индексу — pandas требует DatetimeIndex.</li>
+        <li>Не обрабатывают нераспознанные даты и получают «молчаливые» <code>NaT</code>.</li>
+        <li>Оставляют группировочные ключи в индексе и теряют их при дальнейших операциях.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Схема «to_datetime → set_index → resample → reset_index» — рабочий каркас любой временной агрегации. Проговорите её как рецепт, а не как набор методов.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Память, pivot и melt</h2>
+      <p>dtypes, категории и переход между длинным и широким форматом.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как уменьшить объём данных в памяти?</li>
+        <li>Когда строковая колонка становится category?</li>
+        <li>Чем pivot отличается от melt?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как pandas расходует память?</div>
+        <div class="a">Объектные (<code>object</code>) строковые колонки хранят указатели на Python-строки и очень прожорливы. Числа хранятся плотными массивами: <code>int64</code>, <code>float64</code> занимают по 8 байт на значение. Уменьшение разрядности (<code>int32</code>, <code>float32</code>) и перевод строк в <code>category</code> дают ощутимую экономию.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда колонку перевести в category?</div>
+        <div class="a">Когда уникальных значений мало относительно числа строк: справочники, статусы, регионы. Категория хранит коды плюс маленький словарь и экономит память, но бесполезна, если почти каждое значение уникально.</div>
+      </div>
+      <div class="qa">
+        <div class="q">pivot против melt?</div>
+        <div class="a"><code>pivot</code> разворачивает длинный формат в широкий (значения колонки становятся столбцами), <code>melt</code> делает обратное — сворачивает широкий в длинный (столбцы → «переменная/значение»). Это взаимно обратные операции.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>import pandas as pd
+
+df["region"] = df["region"].astype("category")
+df["amount"] = pd.to_numeric(df["amount"], downcast="float")
+
+wide = df.pivot_table(
+    index="dt", columns="region",
+    values="amount", aggfunc="sum"
+)
+
+long = wide.reset_index().melt(
+    id_vars="dt",
+    var_name="region", value_name="amount"
+)</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Делают <code>astype("category")</code> на высококардинальной колонке — памяти становится только больше.</li>
+        <li>Применяют <code>pivot</code> с дублирующимися парами ключ-столбец и получают ошибку — нужен <code>pivot_table</code> с агрегацией.</li>
+        <li>Не сбрасывают индекс после выбора колонки — теряют связь между индексом и данными.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Держите две связки в голове: «category для низкокардинальных строк» и «pivot ↔ melt — это разворот форматa». На вопрос про память отвечайте через dtypes, а не через общие слова.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">pandas на интервью — это проверка на понимание данных, а не на память о методах. Три кита: соединения (merge + how + гранулярность), агрегации (groupby.agg против transform) и работа с временем (to_datetime + resample).</p>
+      <p class="lead">Почти каждый вопрос сводится к одному: «сколько строк я ожидаю на выходе». Если после merge или groupby вы всегда проговариваете ожидаемую гранулярность, вы выглядите как инженер, а не как пользователь библиотеки.</p>
+      <p class="lead">Держите в арсенале связки-аналогии: <code>agg</code> — это GROUP BY, <code>transform</code> — это окно, <code>merge.how</code> — это SQL JOIN. Именно эти параллели чаще всего и проверяют.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

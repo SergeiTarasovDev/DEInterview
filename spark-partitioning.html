@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Партиционирование и shuffle — Spark · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Spark</div>
+    <h1>Партиционирование и shuffle</h1>
+    <p class="subtitle">Партиции, wide-трансформации и spill</p>
+    <div class="meta-row">
+      <span class="level">Middle</span><span class="level">Senior</span>
+    </div>
+  </header>
+
+  <p class="lead">Партиционирование и shuffle — источник большинства проблем производительности в Spark. Именно здесь появляются перекосы, spill и десятки лишних задач. На интервью проверяют, понимаете ли вы, сколько партиций у вас на входе, что произойдёт на широкой операции и как это исправить.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Что такое партиция</a></li>
+      <li><a href="#s2">2. Shuffle</a></li>
+      <li><a href="#s3">3. repartition vs coalesce</a></li>
+      <li><a href="#s4">4. Spill и перекос</a></li>
+      <li><a href="#s5">5. Partition pruning</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Что такое партиция</h2>
+      <p>Единица параллелизма и связь с narrow/wide трансформациями.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое партиция и зачем она нужна?</li>
+        <li>Как партиции связаны с задачами и параллелизмом?</li>
+        <li>Чем партиция в DataFrame отличается от партиции на диске?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое партиция?</div>
+        <div class="a">Это неделимый кусок данных, который обрабатывается одной задачей. Число партиций задаёт максимальный параллелизм: 100 партиций — до 100 одновременно работающих задач. Слишком мало — недоиспользование кластера, слишком много — накладные расходы на планирование.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Это то же самое, что партиции при записи?</div>
+        <div class="a">Нет. <b>Партиции в памяти</b> — про параллелизм обработки. <b>Партиции на диске</b> (директории вида <code>dt=2026-10-12/</code>) — про физическую раскладку файлов и отсечение при чтении. Это разные, хотя и связанные вещи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как narrow/wide влияют на партиции?</div>
+        <div class="a">Narrow-операции сохраняют разбиение: каждая выходная партиция происходит из одной входной. Wide-операции его меняют: создают новое разбиение по ключу, и для этого нужен shuffle.</div>
+      </div>
+
+      <ul class="keys">
+        <li>Параллелизм ограничен числом партиций и числом доступных ядер.</li>
+        <li>Один большой файл даёт одну входную партицию (если не указан <code>splitSize</code>).</li>
+        <li>Проверить число партиций: <code>df.rdd.getNumPartitions()</code>.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Когда задача «работает, но медленно», первым делом смотрят на число партиций и их размер. Это самый частый источник как недогрузки, так и переполнения памяти.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Shuffle</h2>
+      <p>Самая дорогая операция: сеть, диск и сортировка.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое shuffle и почему он дорогой?</li>
+        <li>Какие трансформации его вызывают?</li>
+        <li>Как shuffle связан со стадиями?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое shuffle?</div>
+        <div class="a">Это перераспределение данных по сети так, чтобы все записи с одним ключом оказались в одной партиции. Каждая задача-исполнитель (map) пишет промежуточный результат, а задачи следующей стадии (reduce) его вычитывают. Отсюда сетевой трафик, запись на диск и сериализация.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие операции вызывают shuffle?</div>
+        <div class="a"><code>groupBy</code>, <code>join</code>, <code>distinct</code>, <code>orderBy</code>, <code>repartition</code>, любой <code>agg</code> без группировки, приведения к одному ключу. Это всё wide-трансформации.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему shuffle — узкое место?</div>
+        <div class="a">Он упирается в сеть и локальный диск, а не в CPU. Плюс чувствителен к перекосу: одна «тяжёлая» партиция может остановить всю стадию, пока остальные уже завершились.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># каждая широкая операция = отдельный shuffle и отдельная стадия
+df.groupBy("country").count()      # shuffle 1
+df.orderBy("cnt", ascending=False) # shuffle 2
+df.distinct()                      # shuffle 3
+
+# фильтруем ДО shuffle: меньше данных поедет по сети
+df.filter(F.col("dt") == "2026-10-12").groupBy("country").count()</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Делают широкую агрегацию до фильтрации — гоняют лишние данные через shuffle.</li>
+        <li>Ставят подряд несколько wide-операций, не задумываясь о цепочке shuffle.</li>
+        <li>Считают, что shuffle кэшируется сам по себе, — при повторном действии он повторится.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Правило интервью: «фильтруй рано, агрегируй поздно». Вся оптимизация в Spark во многом сводится к тому, чтобы уменьшить объём данных, пересекающих границу shuffle.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>repartition vs coalesce</h2>
+      <p>Меняем число партиций правильно — и знаем про shuffle.partitions.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем <code>repartition</code> отличается от <code>coalesce</code>?</li>
+        <li>Что задаёт <code>spark.sql.shuffle.partitions</code>?</li>
+        <li>Зачем менять число партиций перед записью?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">repartition vs coalesce?</div>
+        <div class="a"><code>repartition</code> делает полный shuffle и может как увеличить, так и уменьшить число партиций — зато даёт равномерное разбиение. <code>coalesce</code> только объединяет существующие партиции, без полного shuffle, и его удобно применять для уменьшения числа партиций перед записью (например, чтобы не плодить мелкие файлы).</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое <code>spark.sql.shuffle.partitions</code>?</div>
+        <div class="a">Число партиций по умолчанию для shuffle-стадий (по умолчанию 200). Слишком мало — крупные партиции и риск spill, слишком много — мелкие задачи могут «перегрузить» планировщик. Для больших объёмов часто ставят сотни–тысячи.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему это не то же, что <code>spark.default.parallelism</code>?</div>
+        <div class="a"><code>spark.default.parallelism</code> — про число партиций для RDD-операций и по факту про разбиение при чтении/преобразовании. <code>spark.sql.shuffle.partitions</code> — только про количество партиций, которые получаются в результате shuffle в DataFrame/SQL.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># увеличить партиции с полным shuffle
+df = df.repartition(200, "user_id")
+
+# уменьшить без полного shuffle (перед записью)
+df = df.coalesce(8)
+
+# число партиций для shuffle-стадий
+spark.conf.set("spark.sql.shuffle.partitions", "400")
+
+# по ключу: гарантирует, что одинаковые ключи в одной партиции
+df = df.repartition("user_id")</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Используют <code>coalesce</code> для увеличения партиций — так нельзя, оно только уменьшает.</li>
+        <li>Оставляют <code>shuffle.partitions = 200</code> на терабайтах данных, получая spill.</li>
+        <li>Пишут по тысячам мелких партиций и потом страдают от «small files problem».</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Короткая формула для ответа: «repartition — с shuffle и может расти, coalesce — без shuffle и только уменьшает». Дальше уже про то, где это применяется на практике.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Spill и перекос</h2>
+      <p>Когда партиция не влезает в память и когда одна «тянет» всё.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое spill и почему он возникает?</li>
+        <li>Что такое перекос данных (data skew)?</li>
+        <li>Как понять, что у меня перекос?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое spill?</div>
+        <div class="a">Это выгрузка промежуточных данных из памяти на диск, когда партиция не помещается. Замедляет работу, но спасает от OOM. Частые причины — мало партиций, крупные объекты, слишком большой объём после shuffle.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое перекос?</div>
+        <div class="a">Ситуация, когда данные неравномерно распределены по партициям: несколько «хот-ключей» дают гигантские партиции, а остальные почти пустые. Job ждёт медленную задачу, хотя кластер свободен.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как заметить перекос?</div>
+        <div class="a">В Spark UI видно, что большинство задач в стадии завершились за секунды, а одна-две висят минутами. Также помогает диагностика размеров партиций (например, через <code>spark_partition_id()</code> и агрегаты по размеру).</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql import functions as F
+
+# смотрим распределение строк по партициям
+df.groupBy(F.spark_partition_id().alias("pid")) \
+  .agg(F.count("*").alias("rows")) \
+  .orderBy(F.desc("rows")) \
+  .show()
+
+# перекос: pid=42 сильно опережает остальные -&gt; хот-ключ</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Spill и перекос часто ходят парой: перекошенная партиция не влезает в память и уходит на диск. Борьба с перекосом — тема уровня Senior: сольтинг, broadcast и AQE разбираются в разделе про тюнинг.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Partition pruning</h2>
+      <p>Отсечение партиций при чтении — самый дешёвый способ ускорить запрос.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое partition pruning?</li>
+        <li>Как хранить данные, чтобы отсечение работало?</li>
+        <li>Почему партиционирование по высокой кардинальности вредно?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое partition pruning?</div>
+        <div class="a">Способность Spark <b>не читать</b> файлы, которые заведомо не нужны. Если данные разложены по директориям <code>dt=.../country=...</code>, а в запросе есть фильтр по <code>dt</code>, Spark прочитает только релевантные каталоги. Это экономит самый дорогой ресурс — ввод-вывод.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему высокая кардинальность — плохо?</div>
+        <div class="a">Партиции по <code>user_id</code> или временным меткам с точностью до секунды создадут миллионы мелких каталогов и файлов. Метаданные и листинг файлов станут дороже чтения самих данных. Хорошая партиция — та, по которой фильтруют часто, но значений умеренно.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как проверить, что отсечение сработало?</div>
+        <div class="a">В <code>explain()</code> у <code>FileScan</code> видно поле <code>PartitionFilters</code> и <code>PushedFilters</code>. Если фильтр там — чтение уже отсечено на уровне планирования.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code># запись по партициям
+df.write \
+  .mode("overwrite") \
+  .partitionBy("dt", "country") \
+  .parquet("s3://bucket/events")
+
+# чтение: Spark прочитает только нужные каталоги
+events = spark.read.parquet("s3://bucket/events")
+events.filter(F.col("dt") == "2026-10-12").explain()
+
+# PartitionFilters: [isnotnull(dt), (dt = 2026-10-12)]</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Partition pruning — про то, чтобы «не читать лишнее». Если данных много, а фильтр по дате или региону частый, раскладка по каталогам даёт выигрыш без единой строчки оптимизации в коде.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Партиция — единица параллелизма, а shuffle — цена смены разбиения. Всё, что делает Spark быстрым или медленным, крутится вокруг двух чисел: сколько у вас партиций и сколько данных поедет по сети.</p>
+      <p class="lead">Держите в голове связку инструментов: <b>repartition</b> с shuffle и для роста, <b>coalesce</b> без shuffle и только для уменьшения, <b>shuffle.partitions</b> для настройки стадий, а <b>partition pruning</b> — чтобы вообще не читать лишние файлы. И помните про обратную сторону: перекос и spill превращают самую параллельную операцию в самую последовательную.</p>
+      <p class="lead">На интервью уверенный ответ звучит так: «сначала уменьшаем объём данных фильтрами, потом контролируем число партиций и следим за равномерностью ключей». Это и есть практическое партиционирование.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

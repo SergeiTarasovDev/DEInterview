@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataFrame и RDD — Spark · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Spark</div>
+    <h1>DataFrame и RDD</h1>
+    <p class="subtitle">Catalyst, Tungsten и цена UDF</p>
+    <div class="meta-row">
+      <span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">Тема про абстракции Spark и внутренние движки. Спрашивают, чтобы понять: знаете ли вы, почему DataFrame быстрее низкоуровневого RDD, за что отвечает Catalyst и когда оправдано писать свой UDF, несмотря на потерю производительности.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. RDD, DataFrame, Dataset</a></li>
+      <li><a href="#s2">2. Схемы и типы</a></li>
+      <li><a href="#s3">3. Catalyst optimizer</a></li>
+      <li><a href="#s4">4. Tungsten и когда нужен RDD</a></li>
+      <li><a href="#s5">5. UDF и их цена</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>RDD, DataFrame, Dataset</h2>
+      <p>Три абстракции и чем они отличаются по контролю и оптимизации.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем RDD отличается от DataFrame?</li>
+        <li>Что такое Dataset и есть ли он в PySpark?</li>
+        <li>Почему DataFrame обычно быстрее RDD?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">RDD vs DataFrame?</div>
+        <div class="a"><b>RDD</b> — низкоуровневый набор объектов без схемы: вы контролируете каждую операцию, но оптимизатор вам не помогает. <b>DataFrame</b> — таблица с именованными колонками и типами: Spark сам оптимизирует план через Catalyst и быстро работает через Tungsten.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое Dataset?</div>
+        <div class="a"><b>Dataset</b> — это DataFrame с типизацией на уровне языка (в Scala/Java). Он даёт безопасность типов на этапе компиляции, но при этом проходит через тот же Catalyst. В PySpark полноценного Dataset нет: динамическая природа Python мешает статической типизации, поэтому на практике работают с DataFrame.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему DataFrame быстрее?</div>
+        <div class="a">Потому что операции не выполняются по одной в Python/JVM-объектах, а компилируются оптимизатором в единый физический план. DataFrame не поднимает объекты JVM на каждый элемент и опирается на оптимизации Catalyst и Tungsten.</div>
+      </div>
+
+      <ul class="keys">
+        <li>RDD — когда нужен точный контроль и нет структурной операции.</li>
+        <li>DataFrame — по умолчанию для любых табличных задач.</li>
+        <li>Dataset — типизированный вариант для Scala/Java, с теми же оптимизациями.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Простой ответ на интервью: «DataFrame — это RDD со схемой и оптимизатором сверху». Всё дальнейшее — детали про Catalyst, Tungsten и цену UDF.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Схемы и типы</h2>
+      <p>Зачем явная схема и что даёт тип данных колонки.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое схема DataFrame?</li>
+        <li>Зачем задавать схему явно при чтении?</li>
+        <li>Что будет, если Spark угадывает типы?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Зачем явная схема?</div>
+        <div class="a">Схема фиксирует имена и типы колонок. Явное задание избавляет от лишнего прохода по данным при <code>inferSchema</code> и предотвращает сюрпризы: например, телефон как строка не превратится в число, а дата не станет строкой.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что даёт тип колонки?</div>
+        <div class="a">Правильный тип позволяет оптимизатору применять эффективные операции и отсечение, экономит память (числа компактнее строк) и избавляет от ручных преобразований. Ошибки в типах — частая причина неверных результатов join и агрегаций.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что не так с выводом типов?</div>
+        <div class="a"><code>inferSchema=true</code> читает данные целиком, чтобы определить типы, — это дополнительная работа при старте. Хуже то, что он может ошибиться: ведущие нули в коде превратить в число, а <code>NULL</code>-подобные значения интерпретировать иначе, чем вы ожидали.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql.types import (
+    StructType, StructField, StringType, IntegerType, TimestampType
+)
+
+schema = StructType([
+    StructField("user_id", IntegerType(), nullable=False),
+    StructField("country", StringType(), nullable=True),
+    StructField("amount", IntegerType(), nullable=True),
+    StructField("created_at", TimestampType(), nullable=True),
+])
+
+df = spark.read.schema(schema).json("s3://bucket/events")
+
+print(df.schema.simpleString())
+# struct&lt;user_id:int,country:string,amount:int,created_at:timestamp&gt;</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Хорошая привычка продакшена: схема задаётся явно и версионируется вместе с пайплайном. Это дешевле, безопаснее и стабильнее, чем надеяться на <code>inferSchema</code>.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>Catalyst optimizer</h2>
+      <p>Четыре фазы превращения запроса в физический план.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое Catalyst?</li>
+        <li>Из каких фаз состоит оптимизация?</li>
+        <li>Какие типовые оптимизации он делает?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое Catalyst?</div>
+        <div class="a">Это оптимизатор запросов Spark на основе деревьев правил. Он принимает логический план (из DataFrame API или SQL) и превращает его в оптимизированный физический план.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Какие фазы у Catalyst?</div>
+        <div class="a">1) <b>Analysis</b> — разрешение имён и типов. 2) <b>Logical optimization</b> — перестановка и упрощение правил. 3) <b>Physical planning</b> — выбор конкретных операторов (например, стратегии join). 4) <b>Code generation</b> — генерация Java-байткода для исполнения.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Примеры оптимизаций?</div>
+        <div class="a">Отсечение колонок (projection pruning), проталкивание фильтров вниз (predicate pushdown), объединение узких операций, постоянное свёртывание выражений, переупорядочивание join. Всё это видно в <code>explain()</code>.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>df = spark.read.parquet("s3://bucket/events") \
+    .filter(F.col("dt") == "2026-10-12") \
+    .select("user_id", "amount")
+
+df.explain("extended")
+# == Parsed Logical Plan ==
+# == Analyzed Logical Plan ==
+# == Optimized Logical Plan ==   &lt;- здесь видны правила Catalyst
+# == Physical Plan ==</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Ключевая мысль: вы пишете декларативно, а Catalyst решает, как именно исполнять. Поэтому одинаковый результат можно получить кодом, который в одном случае читает гигабайты, а в другом — мегабайты.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Tungsten и когда нужен RDD</h2>
+      <p>Почему DataFrame быстрый и когда опускаться на уровень ниже.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Что такое Tungsten?</li>
+        <li>Почему DataFrame экономит память и CPU?</li>
+        <li>Когда всё-таки нужен RDD?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Что такое Tungsten?</div>
+        <div class="a">Это проект низкоуровневой оптимизации Spark: собственное управление памятью вне JVM-кучи (off-heap), компактное бинарное представление строк и генерация байткода (whole-stage codegen) вместо интерпретации выражений.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что это даёт на практике?</div>
+        <div class="a">Меньше нагрузки на GC, выше плотность данных в памяти и лучшая скорость CPU. Вместе с Catalyst это и делает DataFrame быстрее ручного RDD-кода в большинстве табличных задач.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда всё-таки RDD?</div>
+        <div class="a">Когда нет структурной операции под вашу задачу: сложный кастомный обход элементов, нестандартное разбиение, работа с неструктурированными данными, или когда нужен точный контроль над партиционированием и отказоустойчивостью на уровне элементов.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>rdd = spark.sparkContext.textFile("s3://bucket/log.txt")
+
+# кастомный разбор, для которого нет простого DataFrame-оператора
+errors = (
+    rdd.filter(lambda line: "ERROR" in line)
+       .map(lambda line: line.split("|"))
+       .map(lambda parts: (parts[0], 1))
+       .reduceByKey(lambda a, b: a + b)
+)
+errors.take(5)</code></pre>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Правило: сначала попробуйте выразить задачу через DataFrame. RDD — запасной вариант, когда структура мешает. И даже тогда возвращайте DataFrame как можно раньше, чтобы вернуть себе оптимизации.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>UDF и их цена</h2>
+      <p>Обычный UDF против pandas_udf — и почему это важно.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Почему UDF считаются дорогими?</li>
+        <li>Чем <code>pandas_udf</code> лучше обычного UDF?</li>
+        <li>Когда UDF оправдан?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Чем плох обычный UDF?</div>
+        <div class="a">Он исполняется вне оптимизатора: Catalyst не может заглянуть внутрь, а строки по одной сериализуются из JVM в Python и обратно. Это и мешает codegen, и резко снижает производительность на больших данных.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что даёт pandas_udf?</div>
+        <div class="a">Он работает векторизованно: принимает <code>pandas.Series</code> и обрабатывает данные пачками через Arrow, а не по строке. Накладные расходы на сериализацию падают в разы, и такой UDF заметно быстрее обычного.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда UDF оправдан?</div>
+        <div class="a">Когда логику нельзя выразить встроенными функциями <code>pyspark.sql.functions</code>, а переносить её в SQL-выражение нецелесообразно. Всегда сначала проверьте встроенные функции — они оптимизируются.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>from pyspark.sql.functions import udf, pandas_udf
+from pyspark.sql.types import DoubleType
+import pandas as pd
+
+# обычный UDF: Python по строке, сериализация JVM &lt;-&gt; Python
+@udf(DoubleType())
+def norm(x):
+    return None if x is None else x / 100.0
+
+# pandas UDF: векторизованно, через Arrow, в разы быстрее
+@pandas_udf(DoubleType())
+def norm_vec(x: pd.Series):
+    return x / 100.0
+
+df.withColumn("amount_norm", norm_vec("amount"))</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пишут UDF там, где есть встроенная функция, и теряют оптимизацию.</li>
+        <li>Используют обычный UDF на больших объёмах, вместо <code>pandas_udf</code>.</li>
+        <li>Забывают типизировать возвращаемое значение или указывают неверный тип.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Формулировка для интервью: «UDF разрывают оптимизатор и codegen, поэтому дороги; pandas_udf возвращает часть производительности за счёт векторизации». Сначала встроенные функции — и только потом свой код.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">DataFrame и RDD — это не «старое» и «новое», а два уровня абстракции. RDD даёт контроль, DataFrame — оптимизацию через Catalyst и Tungsten. В табличных задачах почти всегда выигрывает DataFrame.</p>
+      <p class="lead">Явная схема и корректные типы — это фундамент: они снимают неопределённость, экономят память и не дают оптимизатору ошибиться. Catalyst превращает декларативный код в эффективный план, а Tungsten делает исполнение этого плана быстрым и экономичным по памяти.</p>
+      <p class="lead">UDF — последний инструмент. Сначала встроенные функции, затем <code>pandas_udf</code> для векторизации, и только при необходимости обычный UDF. Чем реже вы «ломаете» оптимизатор, тем быстрее и стабильнее ваш пайплайн.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>

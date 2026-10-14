@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JOIN и агрегации — SQL · Data Engineer</title>
+<link rel="stylesheet" href="book-style.css">
+<script src="book-theme.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">SQL</div>
+    <h1>JOIN и агрегации</h1>
+    <p class="subtitle">Типы соединений, гранулярность и агрегаты</p>
+    <div class="meta-row">
+      <span class="level j">Junior</span><span class="level">Middle</span>
+    </div>
+  </header>
+
+  <p class="lead">Соединения и агрегации — фундамент любого SQL-собеседования. Здесь ломается больше всего запросов: не из-за синтаксиса, а из-за непонимания, что JOIN размножает строки и какой стала гранулярность после каждого шага. Разберём типы соединений, разницу WHERE и HAVING, поведение NULL в агрегатах и анти-соединение.</p>
+
+  <nav class="toc">
+    <h2>Содержание</h2>
+    <ul>
+      <li><a href="#s1">1. Типы соединений</a></li>
+      <li><a href="#s2">2. Размножение строк и гранулярность</a></li>
+      <li><a href="#s3">3. WHERE, HAVING и GROUP BY</a></li>
+      <li><a href="#s4">4. Агрегаты и NULL</a></li>
+      <li><a href="#s5">5. Anti-join, self-join и задачи</a></li>
+      <li><a href="#outro">6. Итог</a></li>
+    </ul>
+  </nav>
+
+  <!-- ============ 1 ============ -->
+  <section class="part" id="s1">
+    <div class="part-head">
+      <div class="num">01</div>
+      <h2>Типы соединений</h2>
+      <p>INNER, LEFT, RIGHT, FULL и CROSS — что именно попадает в результат.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем INNER JOIN отличается от LEFT JOIN?</li>
+        <li>Когда нужен FULL OUTER JOIN?</li>
+        <li>Что такое CROSS JOIN и где он опасен?</li>
+        <li>Чем RIGHT JOIN отличается от LEFT JOIN с перестановкой таблиц?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Чем INNER отличается от LEFT?</div>
+        <div class="a"><code>INNER JOIN</code> оставляет только строки, у которых <b>есть совпадение в обеих таблицах</b>. <code>LEFT JOIN</code> сохраняет <b>все строки левой таблицы</b>, а там, где пары нет, подставляет <code>NULL</code> в колонки правой. Это ключ к задачам «показать всех, даже без заказов».</div>
+      </div>
+      <div class="qa">
+        <div class="q">Когда нужен FULL OUTER JOIN?</div>
+        <div class="a">Когда нужны все строки из <b>обеих</b> таблиц: совпавшие плюс «осиротевшие» слева и справа. Типовой кейс — сверка двух источников, где нужно увидеть расхождения в обе стороны.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое CROSS JOIN?</div>
+        <div class="a">Декартово произведение: каждая строка слева соединяется с каждой строкой справа. Разумен для генерации календаря или всех комбинаций, но при больших таблицах мгновенно даёт миллионы строк. Никогда не пишите его «на всякий случай».</div>
+      </div>
+      <div class="qa">
+        <div class="q">RIGHT JOIN и LEFT JOIN — одно и то же?</div>
+        <div class="a">Логически да: <code>A RIGHT JOIN B</code> = <code>B LEFT JOIN A</code>. Для читаемости на практике почти всегда используют LEFT, расположив главную таблицу слева.</div>
+      </div>
+
+      <ul class="keys">
+        <li><code>INNER</code> — только совпадения; <code>LEFT/RIGHT</code> — одна сторона целиком; <code>FULL</code> — обе стороны.</li>
+        <li>Условие соединения обычно в <code>ON</code>, а фильтр по правой таблице нужно ставить в <code>ON</code>, а не в <code>WHERE</code>, иначе LEFT JOIN вырождается в INNER.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Перед тем как писать JOIN, спросите себя: «какая таблица главная и что должно остаться, если пары нет». Ответ на этот вопрос сразу диктует тип соединения.</div>
+    </article>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section class="part" id="s2">
+    <div class="part-head">
+      <div class="num">02</div>
+      <h2>Размножение строк и гранулярность</h2>
+      <p>Почему JOIN увеличивает число строк и как это ломает суммы.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Может ли JOIN увеличить количество строк?</li>
+        <li>Что такое гранулярность и как её отслеживать?</li>
+        <li>Почему после JOIN сумма заказов стала больше?</li>
+        <li>Что такое веерное размножение (fan-out)?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Может ли JOIN размножить строки?</div>
+        <div class="a">Да, и это происходит постоянно. Если ключ соединения <b>не уникален</b> в правой таблице, каждая строка слева получит столько копий, сколько совпадений справа. Одна строка заказа с двумя позициями в детализации после JOIN превратится в две строки, и <code>SUM(amount)</code> посчитает сумму заказа дважды.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что такое гранулярность?</div>
+        <div class="a">Это уровень детализации: одна строка = «одна сущность». Гранулярность заказов — одна строка на заказ, гранулярность позиций — одна строка на позицию. После каждого JOIN гранулярность может измениться, и её нужно осознанно пересчитывать перед агрегацией.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как проверить, что JOIN не размножает строки?</div>
+        <div class="a">Сравнить число строк до и после соединения, либо проверить уникальность ключа правой таблицы: <code>SELECT key, COUNT(*) ... GROUP BY key HAVING COUNT(*) &gt; 1</code>. Если такие ключи есть — размножение гарантировано.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- проверка уникальности ключа правой таблицы
+SELECT product_id, COUNT(*) AS cnt
+FROM products
+GROUP BY product_id
+HAVING COUNT(*) &gt; 1;
+
+-- безопасный вариант: агрегируем до JOIN
+WITH items_agg AS (
+  SELECT order_id, SUM(price * qty) AS items_sum
+  FROM order_items
+  GROUP BY order_id
+)
+SELECT o.order_id, o.amount, i.items_sum
+FROM orders o
+LEFT JOIN items_agg i ON i.order_id = o.order_id;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Складывают метрику после JOIN к размножившей детализации — получают завышенные суммы.</li>
+        <li>Компенсируют размножение через <code>DISTINCT</code> вместо агрегации до JOIN — теряют строки и замедляют запрос.</li>
+        <li>Не проверяют уникальность ключа перед LEFT JOIN — «лишние» строки просто не замечают.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Золотое правило: <b>агрегируй до соединения, а не после</b>. Если видите всплеск суммы после JOIN — почти всегда виновато размножение строк, а не ошибка в данных.</div>
+    </article>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section class="part" id="s3">
+    <div class="part-head">
+      <div class="num">03</div>
+      <h2>WHERE, HAVING и GROUP BY</h2>
+      <p>Порядок выполнения и куда ставить фильтры по строкам и по группам.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем WHERE отличается от HAVING?</li>
+        <li>Что происходит раньше — WHERE или GROUP BY?</li>
+        <li>Можно ли в WHERE использовать агрегатную функцию?</li>
+        <li>Зачем нужен GROUP BY, если есть DISTINCT?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">WHERE vs HAVING?</div>
+        <div class="a"><code>WHERE</code> фильтрует <b>отдельные строки до группировки</b>, <code>HAVING</code> — <b>уже сгруппированные результаты после</b>. Поэтому условия на агрегаты (<code>HAVING COUNT(*) &gt; 3</code>) живут только в HAVING.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Почему в WHERE нельзя агрегат?</div>
+        <div class="a">По логическому порядку выполнения: <code>FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT</code>. На момент WHERE агрегатов ещё не существует. Фильтровать агрегат можно только в HAVING.</div>
+      </div>
+      <div class="qa">
+        <div class="q">GROUP BY или DISTINCT?</div>
+        <div class="a"><code>DISTINCT</code> убирает дубликаты. <code>GROUP BY</code> группирует и, что важно, позволяет считать агрегаты по группам. Если нужны только уникальные сочетания — хватит DISTINCT; если нужны метрики по группе — GROUP BY.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>SELECT user_id, COUNT(*) AS orders_cnt
+FROM orders
+WHERE status = 'paid'          -- фильтр по строкам
+  AND created_at &gt;= '2024-01-01'
+GROUP BY user_id
+HAVING COUNT(*) &gt;= 3           -- фильтр по группам
+ORDER BY orders_cnt DESC;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Пытаются положить агрегат в <code>WHERE</code> — запрос либо не проходит, либо фильтрует не то.</li>
+        <li>Переносят обычный фильтр в <code>HAVING</code> — формально работает, но медленнее, потому что фильтрация идёт после агрегации.</li>
+        <li>Забывают всё неагрегированное в <code>GROUP BY</code> — получают ошибку или недетерминированный результат.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Одно правило закрывает полтемы: <b>строки — WHERE, группы — HAVING</b>. И старайтесь фильтровать как можно раньше — это ещё и заметно быстрее.</div>
+    </article>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section class="part" id="s4">
+    <div class="part-head">
+      <div class="num">04</div>
+      <h2>Агрегаты и NULL</h2>
+      <p>COUNT(*) против COUNT(col), поведение NULL в SUM и AVG.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Чем COUNT(*) отличается от COUNT(column)?</li>
+        <li>Как NULL ведёт себя в SUM и AVG?</li>
+        <li>Почему AVG вернул не то, что я ожидал?</li>
+        <li>Чем SQL-COUNT отличается от COUNT(DISTINCT)?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">COUNT(*) vs COUNT(column)?</div>
+        <div class="a"><code>COUNT(*)</code> считает <b>все строки</b>. <code>COUNT(column)</code> считает только строки, где значение <b>не NULL</b>. Если в колонке есть пропуски, числа разойдутся — и это самый частый подвох в задачах.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Как NULL ведёт себя в SUM и AVG?</div>
+        <div class="a">Агрегаты, кроме <code>COUNT(*)</code>, <b>игнорируют NULL</b>. <code>SUM</code> складывает только непустые значения, а <code>AVG</code> делит на число непустых. Поэтому среднее может оказаться выше ожидаемого: строки с NULL просто выпали из знаменателя.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Что вернёт SUM по пустой выборке?</div>
+        <div class="a"><code>NULL</code>, а не ноль. Если нужен ноль, оборачивайте: <code>COALESCE(SUM(amount), 0)</code>. По той же причине <code>COUNT</code> по пустой выборке вернёт 0 — это единственное исключение.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>SELECT
+  COUNT(*)                      AS all_rows,
+  COUNT(phone)                  AS with_phone,
+  SUM(amount)                   AS total,
+  AVG(amount)                   AS avg_over_filled,
+  COALESCE(SUM(amount), 0)      AS total_safe,
+  COUNT(DISTINCT user_id)       AS uniq_users
+FROM orders;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Считают «количество по колонке» через <code>COUNT(*)</code> и удивляются расхождению с <code>COUNT(col)</code>.</li>
+        <li>Ожидают ноль от <code>SUM</code> на пустой выборке, а получают <code>NULL</code>.</li>
+        <li>Трактуют <code>AVG</code> как «сумма поделённая на все строки», забывая про пропуски и нули.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Держите в голове: <b>NULL выпадает из агрегатов и из знаменателя AVG</b>. Если это может исказить метрику — заранее решите, заменять NULL нулём через COALESCE или оставить как есть.</div>
+    </article>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section class="part" id="s5">
+    <div class="part-head">
+      <div class="num">05</div>
+      <h2>Anti-join, self-join и задачи</h2>
+      <p>Поиск отсутствующих записей и расхождений между таблицами.</p>
+    </div>
+    <article class="chapter">
+      <div class="blocklabel">Что спросят</div>
+      <ul class="keys">
+        <li>Как найти строки, которых нет в другой таблице?</li>
+        <li>Что такое anti-join и чем он отличается от NOT IN?</li>
+        <li>Зачем нужен self-join?</li>
+      </ul>
+
+      <div class="blocklabel">Вопросы и ответы</div>
+      <div class="qa">
+        <div class="q">Как найти записи, отсутствующие в другой таблице?</div>
+        <div class="a">Через <b>anti-join</b>: <code>LEFT JOIN</code> плюс условие <code>WHERE right.key IS NULL</code>. Так мы берём все строки слева и оставляем те, для которых справа пары не нашлось.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Anti-join или NOT IN?</div>
+        <div class="a">Оба ищут отсутствующие строки, но <code>NOT IN</code> <b>ломается на NULL</b>: если в правом списке есть хотя бы один NULL, условие не сработает и результат будет пустым. <code>NOT EXISTS</code> и anti-join безопаснее и обычно быстрее.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Зачем self-join?</div>
+        <div class="a">Когда строкам нужно сравнить себя с другими строками той же таблицы: иерархия «сотрудник — руководитель», поиск пар-дубликатов, сравнение с предыдущим периодом. Таблицу соединяют саму с собой под разными алиасами.</div>
+      </div>
+
+      <div class="blocklabel">Пример</div>
+      <pre class="code"><code>-- Задача 1. Клиенты без заказов (anti-join)
+SELECT c.client_id, c.name
+FROM clients c
+LEFT JOIN orders o ON o.client_id = c.client_id
+WHERE o.client_id IS NULL;
+
+-- Задача 2. Расхождение между двумя источниками
+SELECT src.client_id,
+       src.amount AS amount_src,
+       tgt.amount AS amount_tgt
+FROM source_sales src
+FULL OUTER JOIN target_sales tgt
+  ON tgt.client_id = src.client_id
+WHERE src.amount IS DISTINCT FROM tgt.amount;
+
+-- Задача 3. Self-join: сотрудник и его руководитель
+SELECT e.name AS employee, m.name AS manager
+FROM employees e
+LEFT JOIN employees m ON m.id = e.manager_id;</code></pre>
+
+      <div class="blocklabel">Частые ошибки</div>
+      <ul class="keys">
+        <li>Ищут отсутствующие строки через <code>NOT IN</code> и натыкаются на NULL — результат внезапно пустой.</li>
+        <li>В anti-join проверяют <code>IS NULL</code> по колонке, которая в данных бывает NULL и без отсутствия пары, — нужна именно колонка ключа из правой таблицы.</li>
+        <li>Сверяют суммы через <code>!=</code>, а из-за NULL сравнение всегда даёт «неизвестно» — нужен <code>IS DISTINCT FROM</code>.</li>
+      </ul>
+
+      <div class="insight"><span class="tag">Вывод составителя</span>Для задач «чего не хватает» и «что расходится» держите два шаблона: <b>LEFT JOIN ... IS NULL</b> и <b>FULL OUTER JOIN ... IS DISTINCT FROM</b>. Они закрывают большинство сверок между таблицами.</div>
+    </article>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section class="part" id="outro">
+    <div class="part-head"><div class="num">Итог</div><h2>Общий вывод составителя</h2></div>
+    <article class="chapter">
+      <p class="lead">Соединения и агрегации — это в первую очередь про гранулярность. Прежде чем писать JOIN или COUNT, ответьте на один вопрос: «сколько строк разных сущностей у меня на каждом шаге и что именно я складываю». Большинство ошибок на интервью — это не забытый синтаксис, а незамеченное размножение строк.</p>
+      <p class="lead">Запомните два контраста, которые проверяют чаще всего: <b>LEFT JOIN не равно INNER</b> (условие по правой таблице должно жить в ON), и <b>WHERE не равно HAVING</b> (строки фильтруются до группировки, группы — после). Добавьте к этому поведение NULL: он выпадает из COUNT(col), SUM и AVG, а NOT IN с NULL даёт пустой результат.</p>
+      <p class="lead">Практический совет: проговаривайте план вслух — «сначала агрегирую детализацию, потом соединяю, потом фильтрую группы». Интервьюер оценивает именно ход мысли, а не только финальный запрос.</p>
+    </article>
+  </section>
+
+  <footer>
+    <p>Data Engineer · подготовка к интервью</p>
+    <p><a href="catalog.html">← Каталог</a></p>
+  </footer>
+
+</div>
+</body>
+</html>
